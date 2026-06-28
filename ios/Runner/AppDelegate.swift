@@ -129,7 +129,7 @@ private final class IosHdrPlayerPlugin: NSObject, FlutterPlugin {
 }
 
 private final class IosHdrPlayerViewFactory: NSObject, FlutterPlatformViewFactory {
-  private weak var plugin: IosHdrPlayerPlugin?
+  private let plugin: IosHdrPlayerPlugin
 
   init(plugin: IosHdrPlayerPlugin) {
     self.plugin = plugin
@@ -147,7 +147,7 @@ private final class IosHdrPlayerViewFactory: NSObject, FlutterPlatformViewFactor
   ) -> FlutterPlatformView {
     let arguments = args as? [String: Any]
     let sessionId = intValue(arguments?["sessionId"])
-    let session = sessionId.flatMap { plugin?.session(id: $0) }
+    let session = sessionId.flatMap { plugin.session(id: $0) }
     return IosHdrPlatformView(frame: frame, session: session)
   }
 }
