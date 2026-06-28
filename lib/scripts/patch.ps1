@@ -42,6 +42,7 @@ $MouseCursorPatch = "lib/scripts/mouse_cursor.patch"
 $GeetestIOSPatch = "lib/scripts/geetest_ios.patch"
 
 if ($platform.ToLower() -eq "ios") {
+    & "$PSScriptRoot/ios_hdr_piliplus.ps1"
     git apply $BottomSheetIOSPiliPlusPatch
     if ($LASTEXITCODE -eq 0) {
         Write-Host "$BottomSheetIOSPiliPlusPatch applied"
