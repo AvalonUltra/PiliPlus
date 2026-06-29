@@ -8,7 +8,7 @@ import 'package:flutter/foundation.dart' show Factory;
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart';
-import 'package:flutter/services.dart' hide Uint8List;
+import 'package:flutter/services.dart';
 
 class IosHdrPlaybackBackend {
   IosHdrPlaybackBackend();
