@@ -2,7 +2,8 @@ import 'package:PiliPlus/common/style.dart';
 import 'package:PiliPlus/utils/extension/theme_ext.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:flutter/cupertino.dart' show CupertinoThemeData;
-import 'package:flutter/foundation.dart' show PlatformDispatcher;
+import 'package:flutter/foundation.dart'
+    show PlatformDispatcher, TargetPlatform, defaultTargetPlatform;
 import 'package:flutter/material.dart';
 
 abstract final class ThemeUtils {
@@ -39,11 +40,17 @@ abstract final class ThemeUtils {
         ? null
         : FontWeight.values[appFontWeight];
     late final textStyle = TextStyle(fontWeight: fontWeight);
+    // 仅 Apple 平台:显式钉住系统字体为主字体,BabelStone Han 只作末位回退,
+    // 兜住系统缺失的生僻字(扩展 B-H 区)。不指定主字体时,fallback 首项会被
+    // 当成主字体,导致 BabelStone Han(自带拉丁字形)整体接管正文。
+    final bool isApple =
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
     ThemeData themeData = ThemeData(
       colorScheme: colorScheme,
       useMaterial3: true,
-      // 生僻字回退:系统字体缺字时用 BabelStone Han 补(覆盖扩展 B-H 区)
-      fontFamilyFallback: const ['BabelStone Han'],
+      fontFamily: isApple ? 'CupertinoSystemText' : null,
+      fontFamilyFallback: isApple ? const ['BabelStone Han'] : null,
       textTheme: fontWeight == null
           ? null
           : TextTheme(
