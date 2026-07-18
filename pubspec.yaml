@@ -275,6 +275,9 @@ flutter:
     - path: assets/shaders/
 
   fonts:
+    - family: BabelStone Han
+      fonts:
+        - asset: assets/fonts/BabelStoneHan.ttf
     - family: digital_id_num
       fonts:
         - asset: assets/fonts/digital_id_num.ttf

@@ -42,6 +42,8 @@ abstract final class ThemeUtils {
     ThemeData themeData = ThemeData(
       colorScheme: colorScheme,
       useMaterial3: true,
+      // 生僻字回退:系统字体缺字时用 BabelStone Han 补(覆盖扩展 B-H 区)
+      fontFamilyFallback: const ['BabelStone Han'],
       textTheme: fontWeight == null
           ? null
           : TextTheme(
