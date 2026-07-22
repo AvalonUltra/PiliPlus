@@ -13,6 +13,7 @@ abstract final class SettingBoxKey {
       defaultPicQa = 'defaultPicQa',
       enableHA = 'enableHA',
       androidHdrPlayback = 'androidHdrPlayback',
+      iosNativeAbr = 'iosNativeAbr',
       audioOutput = 'audioOutput',
       bufferSize = 'bufferSize',
       bufferSec = 'bufferSec',

@@ -49,6 +49,21 @@ final class DashHlsBridge: NSObject {
         var fileLength: UInt64 = 0
         var isVideo: Bool
         var localInitName: String?
+        // Per-variant display metadata (multi-variant ABR master).
+        var qualityCode: Int?
+        var frameRate: Double?
+        var width: Int = 0
+        var height: Int = 0
+        var pathTag: String = "v"
+    }
+
+    /// One selectable video quality for the ABR master playlist.
+    struct VariantInput {
+        let url: String
+        let qualityCode: Int?
+        let frameRate: Double?
+        let width: Int
+        let height: Int
     }
 
     private let headers: [String: String]
@@ -74,9 +89,6 @@ final class DashHlsBridge: NSObject {
     private var server: HdrLocalServer?
     private(set) var videoCodec: String?
     private(set) var audioCodec: String?
-    private var frameRate: Double?
-    private var videoWidth = 0
-    private var videoHeight = 0
 
     deinit {
         server?.stop()
@@ -92,6 +104,7 @@ final class DashHlsBridge: NSObject {
 
     /// Builds all playlists. Throws DashHlsError; unsupportedAudio is reported
     /// separately so the Dart side can retry without the audio track.
+    /// Single-variant entry point (HDR/Dolby path — one chosen quality).
     func prepare(
         videoUrl: String,
         audioUrl: String?,
@@ -101,19 +114,32 @@ final class DashHlsBridge: NSObject {
         width: Int? = nil,
         height: Int? = nil
     ) async throws {
-        self.frameRate = frameRate.flatMap(Double.init)
-        self.videoWidth = width ?? 0
-        self.videoHeight = height ?? 0
-        var video = try await loadTrack(url: videoUrl, isFileSource: isFileSource, isVideo: true)
-        if video.videoRange != nil || qualityCode == 125 || qualityCode == 126 {
-            // Always label HDR variants PQ: the device capability screen
-            // accepts PQ but rejects HLG-labelled variants (-12927), while
-            // actual rendering is driven by the bitstream's colr/VUI — HLG
-            // content labelled PQ renders correctly (DV 8.4 precedent).
-            video.videoRange = "PQ"
-        }
+        try await prepare(
+            variants: [
+                VariantInput(
+                    url: videoUrl,
+                    qualityCode: qualityCode,
+                    frameRate: frameRate.flatMap(Double.init),
+                    width: width ?? 0,
+                    height: height ?? 0
+                )
+            ],
+            audioUrl: audioUrl,
+            isFileSource: isFileSource
+        )
+    }
 
-        videoCodec = video.codec
+    /// Multi-variant entry point: builds one media playlist per quality plus a
+    /// master with an `#EXT-X-STREAM-INF` per variant so AVPlayer performs
+    /// native ABR (seamless quality switching driven by measured throughput).
+    func prepare(
+        variants: [VariantInput],
+        audioUrl: String?,
+        isFileSource: Bool
+    ) async throws {
+        guard !variants.isEmpty else { throw DashHlsError.parse("no video variants") }
+
+        // Shared audio track (ABR switches video only; audio stays one group).
         var audio: Track? = nil
         if let audioUrl, !audioUrl.isEmpty {
             audio = try await loadTrack(url: audioUrl, isFileSource: isFileSource, isVideo: false)
@@ -121,13 +147,51 @@ final class DashHlsBridge: NSObject {
                 throw DashHlsError.unsupportedAudio(codec)
             }
         }
-
         audioCodec = audio?.codec
-        playlists["video.m3u8"] = mediaPlaylist(for: video, pathTag: "v")
+
+        // Load each variant's head (init+sidx) in parallel; drop any that fail
+        // so one bad quality can't sink the whole master.
+        var loaded: [(Int, Track)] = []
+        try await withThrowingTaskGroup(of: (Int, Track?).self) { group in
+            for (i, v) in variants.enumerated() {
+                group.addTask { [self] in
+                    do {
+                        var t = try await loadTrack(url: v.url, isFileSource: isFileSource, isVideo: true)
+                        if t.videoRange != nil || v.qualityCode == 125 || v.qualityCode == 126 {
+                            // HDR variants must be labelled PQ (device rejects HLG
+                            // with -12927; bitstream colr drives real rendering).
+                            t.videoRange = "PQ"
+                        }
+                        t.qualityCode = v.qualityCode
+                        t.frameRate = v.frameRate
+                        t.width = v.width
+                        t.height = v.height
+                        return (i, t)
+                    } catch {
+                        return (i, nil)
+                    }
+                }
+            }
+            for try await (i, t) in group {
+                if let t { loaded.append((i, t)) }
+            }
+        }
+        guard !loaded.isEmpty else { throw DashHlsError.parse("all variants failed to load") }
+        // Preserve caller order (highest→lowest as sent); assign stable tags.
+        loaded.sort { $0.0 < $1.0 }
+        var tracks: [Track] = []
+        for (idx, pair) in loaded.enumerated() {
+            var t = pair.1
+            t.pathTag = "v\(idx)"
+            tracks.append(t)
+            playlists["video_\(idx).m3u8"] = mediaPlaylist(for: t, pathTag: t.pathTag)
+        }
+        videoCodec = tracks.first?.codec
+
         if let audio {
             playlists["audio.m3u8"] = mediaPlaylist(for: audio, pathTag: "a")
         }
-        playlists["master.m3u8"] = masterPlaylist(video: video, audio: audio)
+        playlists["master.m3u8"] = masterPlaylist(variants: tracks, audio: audio)
         for (name, data) in playlists {
             try data.write(to: playlistDir.appendingPathComponent(name))
         }
@@ -324,49 +388,54 @@ final class DashHlsBridge: NSObject {
         return lines.joined(separator: "\n").data(using: .utf8)!
     }
 
-    private func masterPlaylist(video: Track, audio: Track?) -> Data {
+    // HLS BANDWIDTH is the peak segment bitrate of the variant.
+    private func peakRate(_ track: Track) -> Double {
+        track.segments
+            .filter { $0.duration > 0 }
+            .map { Double($0.size) * 8 / $0.duration }
+            .max() ?? 0
+    }
+
+    private func masterPlaylist(variants: [Track], audio: Track?) -> Data {
         var lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS"]
-        var streamInf: [String] = []
-        // HLS BANDWIDTH is the peak segment bitrate of the variant.
-        func peakRate(_ track: Track) -> Double {
-            track.segments
-                .filter { $0.duration > 0 }
-                .map { Double($0.size) * 8 / $0.duration }
-                .max() ?? 0
-        }
-        var peak = peakRate(video)
-        if let audio { peak += peakRate(audio) }
-        let bandwidth = peak > 0 ? Int(peak) : 10_000_000
-        streamInf.append("BANDWIDTH=\(max(bandwidth, 1))")
-        var codecs: [String] = []
-        if let codec = video.codec { codecs.append(codec) }
-        if let audio, let codec = audio.codec { codecs.append(codec) }
-        if !codecs.isEmpty {
-            streamInf.append("CODECS=\"\(codecs.joined(separator: ","))\"")
-        }
-        if videoWidth > 0, videoHeight > 0 {
-            streamInf.append("RESOLUTION=\(videoWidth)x\(videoHeight)")
-        }
-        if let range = video.videoRange {
-            // OS 27-generation quirk (A/B verified): a non-SDR VIDEO-RANGE is
-            // rejected with -1002 unless the variant also declares FRAME-RATE.
-            // VIDEO-RANGE itself is required signalling for HDR/Dolby variants
-            // (its absence makes the validator reject dvh1/high-tier HEVC
-            // variants with -12927), so always emit both together.
-            let fps = frameRate ?? 30.0
-            streamInf.append(String(format: "FRAME-RATE=%.3f", fps))
-            streamInf.append("VIDEO-RANGE=\(range)")
-        } else if let fps = frameRate {
-            streamInf.append(String(format: "FRAME-RATE=%.3f", fps))
-        }
+        let audioPeak = audio.map(peakRate) ?? 0
         if audio != nil {
             lines.append(
                 "#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"audio\",NAME=\"main\",DEFAULT=YES,AUTOSELECT=YES,URI=\"audio.m3u8\""
             )
-            streamInf.append("AUDIO=\"audio\"")
         }
-        lines.append("#EXT-X-STREAM-INF:\(streamInf.joined(separator: ","))")
-        lines.append("video.m3u8")
+        // One #EXT-X-STREAM-INF per quality — AVPlayer selects & switches among
+        // them via native ABR (measured throughput + buffer occupancy).
+        for (idx, video) in variants.enumerated() {
+            var streamInf: [String] = []
+            let peak = peakRate(video) + audioPeak
+            let bandwidth = peak > 0 ? Int(peak) : 10_000_000
+            streamInf.append("BANDWIDTH=\(max(bandwidth, 1))")
+            var codecs: [String] = []
+            if let codec = video.codec { codecs.append(codec) }
+            if let audio, let codec = audio.codec { codecs.append(codec) }
+            if !codecs.isEmpty {
+                streamInf.append("CODECS=\"\(codecs.joined(separator: ","))\"")
+            }
+            if video.width > 0, video.height > 0 {
+                streamInf.append("RESOLUTION=\(video.width)x\(video.height)")
+            }
+            if let range = video.videoRange {
+                // OS 27-generation quirk: a non-SDR VIDEO-RANGE is rejected with
+                // -1002 unless the variant also declares FRAME-RATE; VIDEO-RANGE
+                // itself is required for HDR/Dolby variants, so emit both.
+                let fps = video.frameRate ?? 30.0
+                streamInf.append(String(format: "FRAME-RATE=%.3f", fps))
+                streamInf.append("VIDEO-RANGE=\(range)")
+            } else if let fps = video.frameRate {
+                streamInf.append(String(format: "FRAME-RATE=%.3f", fps))
+            }
+            if audio != nil {
+                streamInf.append("AUDIO=\"audio\"")
+            }
+            lines.append("#EXT-X-STREAM-INF:\(streamInf.joined(separator: ","))")
+            lines.append("video_\(idx).m3u8")
+        }
         return lines.joined(separator: "\n").data(using: .utf8)!
     }
 

@@ -780,6 +780,13 @@ abstract final class Pref {
       (Platform.isAndroid || Platform.isIOS) &&
       _setting.get(SettingBoxKey.androidHdrPlayback, defaultValue: false);
 
+  /// iOS 原生播放器无缝自动画质(多 variant ABR)。开启后,选“自动”画质的
+  /// 在线视频会走 AVPlayer 原生 ABR 无缝切档(代价:该模式下不走 mpv,
+  /// 外挂字幕/超分等 mpv 专属功能不可用)。
+  static bool get iosNativeAbr =>
+      Platform.isIOS &&
+      _setting.get(SettingBoxKey.iosNativeAbr, defaultValue: false);
+
   static Set<int> get danmakuBlockType => Set<int>.from(
     _setting.get(SettingBoxKey.danmakuBlockType, defaultValue: const <int>{}),
   );

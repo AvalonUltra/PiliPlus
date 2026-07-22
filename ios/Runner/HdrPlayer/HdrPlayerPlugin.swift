@@ -62,6 +62,20 @@ final class HdrPlayerPlugin: NSObject, FlutterStreamHandler {
                 result(FlutterError(code: "bad_args", message: "videoUrl is required", details: nil))
                 return
             }
+            // Optional multi-quality list → native ABR master playlist.
+            var variants: [DashHlsBridge.VariantInput]? = nil
+            if let rawVariants = args?["videoVariants"] as? [[String: Any]], !rawVariants.isEmpty {
+                variants = rawVariants.compactMap { item in
+                    guard let url = item["url"] as? String, !url.isEmpty else { return nil }
+                    return DashHlsBridge.VariantInput(
+                        url: url,
+                        qualityCode: item["qualityCode"] as? Int,
+                        frameRate: (item["frameRate"] as? NSNumber)?.doubleValue,
+                        width: item["width"] as? Int ?? 0,
+                        height: item["height"] as? Int ?? 0
+                    )
+                }
+            }
             session.open(
                 videoUrl: videoUrl,
                 audioUrl: args?["audioUrl"] as? String,
@@ -72,7 +86,8 @@ final class HdrPlayerPlugin: NSObject, FlutterStreamHandler {
                 qualityCode: args?["qualityCode"] as? Int,
                 frameRate: args?["frameRate"] as? String,
                 width: args?["width"] as? Int,
-                height: args?["height"] as? Int
+                height: args?["height"] as? Int,
+                variants: variants
             )
             result(nil)
 

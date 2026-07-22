@@ -66,6 +66,15 @@ List<SettingsModel> get playSettings => [
       setKey: SettingBoxKey.androidHdrPlayback,
       defaultVal: false,
     ),
+  if (Platform.isIOS)
+    const SwitchModel(
+      title: '无缝自动画质（原生播放器）',
+      subtitle: '“自动”画质时用 AVPlayer 原生 ABR 按网速无缝切档；该模式下不走 mpv，'
+          '外挂字幕/超分等功能不可用',
+      leading: Icon(Icons.hd_outlined),
+      setKey: SettingBoxKey.iosNativeAbr,
+      defaultVal: false,
+    ),
   const SwitchModel(
     title: '全屏显示锁定按钮',
     leading: Icon(Icons.lock_outline),

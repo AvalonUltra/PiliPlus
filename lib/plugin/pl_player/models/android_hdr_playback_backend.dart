@@ -66,6 +66,9 @@ class AndroidHdrPlaybackBackend extends PlaybackBackend {
       'frameRate': dataSource.frameRate,
       'width': width,
       'height': height,
+      if (dataSource.videoVariants case final variants?
+          when variants.length > 1)
+        'videoVariants': variants.map((e) => e.toMap()).toList(),
       'startMs': start?.inMilliseconds ?? 0,
       'durationMs': duration?.inMilliseconds,
       'headers': headers ?? const <String, String>{},

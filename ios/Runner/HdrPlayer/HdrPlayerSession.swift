@@ -50,7 +50,8 @@ final class HdrPlayerSession: NSObject {
         qualityCode: Int?,
         frameRate: String? = nil,
         width: Int? = nil,
-        height: Int? = nil
+        height: Int? = nil,
+        variants: [DashHlsBridge.VariantInput]? = nil
     ) {
         setFitMode(fitMode)
         pendingStartMs = startMs
@@ -58,15 +59,24 @@ final class HdrPlayerSession: NSObject {
         self.bridge = bridge
         Task { [weak self] in
             do {
-                try await bridge.prepare(
-                    videoUrl: videoUrl,
-                    audioUrl: audioUrl,
-                    isFileSource: isFileSource,
-                    qualityCode: qualityCode,
-                    frameRate: frameRate,
-                    width: width,
-                    height: height
-                )
+                if let variants, variants.count > 1 {
+                    // Multi-variant ABR: AVPlayer switches quality seamlessly.
+                    try await bridge.prepare(
+                        variants: variants,
+                        audioUrl: audioUrl,
+                        isFileSource: isFileSource
+                    )
+                } else {
+                    try await bridge.prepare(
+                        videoUrl: variants?.first?.url ?? videoUrl,
+                        audioUrl: audioUrl,
+                        isFileSource: isFileSource,
+                        qualityCode: qualityCode,
+                        frameRate: frameRate,
+                        width: width,
+                        height: height
+                    )
+                }
                 await MainActor.run { [weak self] in
                     self?.attachItem(bridge: bridge, headers: headers)
                 }

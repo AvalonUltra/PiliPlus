@@ -844,6 +844,7 @@ class VideoDetailController extends GetxController
               audioSource: audioUrl,
               qualityCode: currentVideoQa.value?.code,
               frameRate: firstVideo.frameRate,
+              videoVariants: _buildAbrVariants(),
             ),
       seekTo: seek,
       duration: data.timeLength == null
@@ -905,6 +906,49 @@ class VideoDetailController extends GetxController
 
   // 视频链接
   /// TODO: merge [DownloadHttp.getVideoUrl].
+  static const Set<int> _hdrCodesForAbr = {125, 126, 127, 129};
+
+  /// 为 iOS 原生 ABR 组装多画质变体列表:仅在 iOS + 开启原生 ABR + “自动”画质
+  /// 时返回;每个画质取与当前编码族一致的一条(利于无缝切换),排除 HDR/杜比
+  /// 档(ABR 只在 SDR 阶梯内切换)。变体 <2 条则返回 null(退回普通播放)。
+  List<HdrVariant>? _buildAbrVariants() {
+    if (!Platform.isIOS ||
+        !Pref.iosNativeAbr ||
+        !plPlayerController.isAutoVideoQa ||
+        isFileSource ||
+        data.dash?.video == null) {
+      return null;
+    }
+    final videos = data.dash!.video!;
+    final codes =
+        videos
+            .map((e) => e.quality.code)
+            .where((c) => !_hdrCodesForAbr.contains(c))
+            .toSet()
+            .toList()
+          ..sort((a, b) => b.compareTo(a)); // 高→低
+    final variants = <HdrVariant>[];
+    for (final code in codes) {
+      final items = videos.where((e) => e.quality.code == code);
+      final chosen = items.firstWhere(
+        (e) => currentDecodeFormats.codes.any(
+          (c) => e.codecs?.startsWith(c) ?? false,
+        ),
+        orElse: () => items.first,
+      );
+      variants.add(
+        HdrVariant(
+          url: VideoUtils.getCdnUrl(chosen.playUrls),
+          qualityCode: code,
+          frameRate: double.tryParse(chosen.frameRate ?? ''),
+          width: chosen.width,
+          height: chosen.height,
+        ),
+      );
+    }
+    return variants.length >= 2 ? variants : null;
+  }
+
   Future<void> queryVideoUrl({
     bool fromReset = false,
     bool autoFullScreenFlag = false,

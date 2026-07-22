@@ -845,13 +845,25 @@ class PlPlayerController with BlockConfigMixin {
     return supportsHdr;
   }
 
+  /// iOS 无缝自动画质:选“自动”且数据源带多画质变体时,走 AVPlayer 原生 ABR。
+  bool _wantsNativeAbr(DataSource dataSource) {
+    return Pref.iosNativeAbr &&
+        Platform.isIOS &&
+        !isLive &&
+        isAutoVideoQa &&
+        !_requiresMpvOnlyFeature &&
+        dataSource is NetworkSource &&
+        (dataSource.videoVariants?.length ?? 0) > 1;
+  }
+
   Future<void> _createPlaybackBackend(
     DataSource dataSource,
     Duration? seekTo,
     Volume? volume,
     Duration? duration,
   ) async {
-    if (await _shouldUseAndroidHdrBackend()) {
+    final wantsAbr = _wantsNativeAbr(dataSource);
+    if (wantsAbr || await _shouldUseAndroidHdrBackend()) {
       try {
         await _createAndroidHdrBackend(dataSource, seekTo, duration);
         return;
