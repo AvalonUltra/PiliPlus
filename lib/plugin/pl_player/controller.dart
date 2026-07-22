@@ -937,6 +937,11 @@ class PlPlayerController with BlockConfigMixin {
     await _disposeAndroidHdrBackend();
     final opt = {
       'video-sync': Pref.videoSync,
+      // 网络抖动/PCDN 短暂丢包时让 ffmpeg 透明重连并从断点续拉,
+      // 大幅减少可见的“断流”(对所有在线视频生效)。真正失效的地址
+      // (如 deadline 过期返回 403)ffmpeg 不会重试,仍由回源重拉兜底。
+      'stream-lavf-o':
+          'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)

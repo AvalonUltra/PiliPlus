@@ -74,7 +74,13 @@ class MediaKitPlaybackBackend extends PlaybackBackend {
     final player = await Player.create(
       configuration: PlayerConfiguration(
         logLevel: kDebugMode ? .warn : .error,
-        options: {...options, 'demuxer-max-bytes': bufferSize.toString()},
+        options: {
+          // ffmpeg 透明重连:网络抖动时自动从断点续拉,减少可见断流
+          'stream-lavf-o':
+              'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
+          ...options,
+          'demuxer-max-bytes': bufferSize.toString(),
+        },
       ),
     );
     _videoController = await VideoController.create(
