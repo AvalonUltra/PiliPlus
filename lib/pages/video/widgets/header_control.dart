@@ -881,6 +881,8 @@ class HeaderControlState extends State<HeaderControl>
     final VideoQuality? currentVideoQa = videoDetailCtr.currentVideoQa.value;
     if (currentVideoQa == null) return;
 
+    final bool isAutoQa = videoDetailCtr.plPlayerController.isAutoVideoQa;
+
     final List<FormatItem> videoFormat = videoInfo.supportFormats!;
 
     /// 总质量分类
@@ -931,11 +933,34 @@ class HeaderControlState extends State<HeaderControl>
                     ),
                   ),
                 ),
+                SliverToBoxAdapter(
+                  child: ListTile(
+                    dense: true,
+                    onTap: () {
+                      Get.back();
+                      if (!isAutoQa) {
+                        videoDetailCtr.switchToAutoQa();
+                        SmartDialog.showToast('画质已切换为：自动');
+                      }
+                    },
+                    contentPadding: const EdgeInsets.symmetric(horizontal: 20),
+                    title: const Text('自动'),
+                    subtitle: isAutoQa
+                        ? Text(
+                            '当前 ${currentVideoQa.desc}',
+                            style: subTitleStyle,
+                          )
+                        : null,
+                    trailing: isAutoQa
+                        ? Icon(Icons.done, color: theme.colorScheme.primary)
+                        : Text('智能', style: subTitleStyle),
+                  ),
+                ),
                 SliverList.builder(
                   itemCount: totalQaSam,
                   itemBuilder: (context, index) {
                     final item = videoFormat[index];
-                    final isCurr = currentVideoQa.code == item.quality;
+                    final isCurr = !isAutoQa && currentVideoQa.code == item.quality;
                     return ListTile(
                       dense: true,
                       onTap: () async {
@@ -946,6 +971,8 @@ class HeaderControlState extends State<HeaderControl>
                         final int quality = item.quality!;
                         final newQa = VideoQuality.fromCode(quality);
                         videoDetailCtr
+                          ..plPlayerController.isAutoVideoQa = false
+                          ..plPlayerController.autoQaCap = null
                           ..plPlayerController.cacheVideoQa = newQa.code
                           ..currentVideoQa.value = newQa
                           ..updatePlayer();

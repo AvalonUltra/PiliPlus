@@ -61,6 +61,7 @@ import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/page_utils.dart';
 import 'package:PiliPlus/utils/platform_utils.dart';
 import 'package:PiliPlus/utils/storage.dart';
+import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
@@ -386,6 +387,115 @@ class VideoDetailController extends GetxController
       vsync: this,
       initialIndex: Pref.defaultShowComment ? 1 : 0,
     );
+
+    // 断流恢复:开流持续失败时回源重拉新 playurl 续播
+    plPlayerController.onRefetchUrl = refetchAndResume;
+    // 自动画质:反复卡顿时降一档
+    plPlayerController.onAutoStepDown = autoQaStepDown;
+  }
+
+  /// 断流恢复:保存当前进度,回源重新拉取 playurl(重新选 CDN)后从原位续播。
+  /// 非自动画质时锁定当前清晰度,避免回源后画质漂移。
+  bool _isRecovering = false;
+  Future<void> refetchAndResume() async {
+    if (isFileSource || _isRecovering) return;
+    _isRecovering = true;
+    try {
+      final pos = plPlayerController.videoPlayerController?.state.position;
+      if (pos != null && pos > Duration.zero) {
+        playedTime = pos;
+        defaultST = pos;
+      }
+      if (!plPlayerController.isAutoVideoQa) {
+        final cur = currentVideoQa.value?.code;
+        if (cur != null) plPlayerController.cacheVideoQa = cur;
+      }
+      await queryVideoUrl(fromReset: true);
+    } finally {
+      _isRecovering = false;
+    }
+  }
+
+  /// 自动画质降档:降到当前档之下最近的一档并重载续播。
+  Future<void> autoQaStepDown() async {
+    if (!plPlayerController.isAutoVideoQa || data.dash?.video == null) return;
+    final cur = currentVideoQa.value?.code;
+    final avail = data.dash!.video!.map((e) => e.quality.code).toSet().toList()
+      ..sort();
+    final below = avail.where((c) => cur == null || c < cur).toList();
+    if (below.isEmpty) return; // 已是最低档,无法再降
+    plPlayerController.autoQaCap = below.last;
+    if (kDebugMode) {
+      debugPrint('[autoQa] 卡顿降档 $cur -> ${below.last}');
+    }
+    SmartDialog.showToast('网络较慢,已自动降低画质');
+    await refetchAndResume();
+  }
+
+  /// 依据实测网速从可用清晰度中选一档(“自动”画质)。
+  /// 已设降档上限(autoQaCap)时跳过测速,直接取上限内最高档。
+  Future<int> _resolveAutoQa(List<VideoItem> videoList) async {
+    // code -> 该档最低带宽(kbps,取各编码里最省的)
+    final Map<int, int> bwMap = {};
+    for (final v in videoList) {
+      final int? bw = v.bandWidth;
+      if (bw == null || bw <= 0) continue;
+      final int kbps = (bw / 1000).round();
+      final int code = v.quality.code;
+      bwMap[code] = bwMap.containsKey(code)
+          ? (kbps < bwMap[code]! ? kbps : bwMap[code]!)
+          : kbps;
+    }
+    final avail = bwMap.keys.toList()..sort();
+    if (avail.isEmpty) return videoList.first.quality.code;
+
+    final cap = plPlayerController.autoQaCap;
+    int? measuredKbps;
+    if (cap == null) {
+      measuredKbps = await VideoUtils.probeBandwidthKbps(
+        VideoUtils.getCdnUrl(videoList.first.playUrls),
+      );
+    }
+
+    int chosen = avail.first; // 兜底:最低档
+    for (final code in avail) {
+      // 升序遍历,尽量取更高档
+      if (cap != null && code > cap) break;
+      if (measuredKbps == null) {
+        // 测速失败:保守封顶 1080P,避免盲目选顶档反而卡
+        if (cap == null && code > VideoQuality.high1080.code) break;
+      } else if (bwMap[code]! > measuredKbps * 0.8) {
+        break; // 该档所需带宽超过实测的 80%,再高会卡
+      }
+      chosen = code;
+    }
+    if (kDebugMode) {
+      debugPrint(
+        '[autoQa] measured=$measuredKbps kbps cap=$cap -> $chosen '
+        '(需 ${bwMap[chosen]} kbps)',
+      );
+    }
+    return chosen;
+  }
+
+  /// 切换到“自动”画质(播放器内菜单):基于已拉取的 data 重选一档,无需回源。
+  Future<void> switchToAutoQa() async {
+    if (data.dash?.video == null) return;
+    plPlayerController
+      ..isAutoVideoQa = true
+      ..autoQaCap = null;
+    final target = await _resolveAutoQa(data.dash!.video!);
+    currentVideoQa.value = VideoQuality.fromCode(target);
+    plPlayerController.cacheVideoQa = target;
+    updatePlayer();
+    if (!plPlayerController.tempPlayerConf) {
+      GStorage.setting.put(
+        await ConnectivityUtils.isWiFi
+            ? SettingBoxKey.defaultVideoQa
+            : SettingBoxKey.defaultVideoQaCellular,
+        VideoQuality.autoCode,
+      );
+    }
   }
 
   Future<void> getMediaList({
@@ -811,10 +921,14 @@ class VideoDetailController extends GetxController
     }
     if (plPlayerController.cacheVideoQa == null) {
       final isWiFi = await ConnectivityUtils.isWiFi;
+      final int prefQa = isWiFi
+          ? Pref.defaultVideoQa
+          : Pref.defaultVideoQaCellular;
+      final bool auto = prefQa == VideoQuality.autoCode;
       plPlayerController
-        ..cacheVideoQa = isWiFi
-            ? Pref.defaultVideoQa
-            : Pref.defaultVideoQaCellular
+        ..isAutoVideoQa = auto
+        // 自动模式下 cacheVideoQa 存一个真实兜底档,真正目标由 _resolveAutoQa 决定
+        ..cacheVideoQa = auto ? VideoQuality.high1080.code : prefQa
         ..cacheAudioQa = isWiFi
             ? Pref.defaultAudioQa
             : Pref.defaultAudioQaCellular;
@@ -895,15 +1009,21 @@ class VideoDetailController extends GetxController
       // if (kDebugMode) debugPrint("allVideosList:${allVideosList}");
       // 当前可播放的最高质量视频
       final curHighestVideoQa = videoList.first.quality.code;
-      // 预设的画质为null，则当前可用的最高质量
-      int targetVideoQa = curHighestVideoQa;
-      if (data.acceptQuality?.isNotEmpty == true &&
-          plPlayerController.cacheVideoQa! <= curHighestVideoQa) {
-        // 如果预设的画质低于当前最高
-        targetVideoQa = data.acceptQuality!.findClosestTarget(
-          (e) => e <= plPlayerController.cacheVideoQa!,
-          (a, b) => a > b ? a : b,
-        );
+      int targetVideoQa;
+      if (plPlayerController.isAutoVideoQa) {
+        // “自动”画质:按实测网速选一档
+        targetVideoQa = await _resolveAutoQa(videoList);
+      } else {
+        // 预设的画质为null，则当前可用的最高质量
+        targetVideoQa = curHighestVideoQa;
+        if (data.acceptQuality?.isNotEmpty == true &&
+            plPlayerController.cacheVideoQa! <= curHighestVideoQa) {
+          // 如果预设的画质低于当前最高
+          targetVideoQa = data.acceptQuality!.findClosestTarget(
+            (e) => e <= plPlayerController.cacheVideoQa!,
+            (a, b) => a > b ? a : b,
+          );
+        }
       }
       currentVideoQa.value = VideoQuality.fromCode(targetVideoQa);
 
@@ -1248,6 +1368,13 @@ class VideoDetailController extends GetxController
   @override
   void onClose() {
     cid.close();
+    // 播放器为单例,页面销毁时清掉本页注入的回调,避免指向已销毁的控制器
+    if (plPlayerController.onRefetchUrl == refetchAndResume) {
+      plPlayerController.onRefetchUrl = null;
+    }
+    if (plPlayerController.onAutoStepDown == autoQaStepDown) {
+      plPlayerController.onAutoStepDown = null;
+    }
     if (isFileSource) {
       cacheLocalProgress();
     }

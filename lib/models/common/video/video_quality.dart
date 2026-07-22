@@ -23,4 +23,12 @@ enum VideoQuality {
   static final _codeMap = {for (final i in values) i.code: i};
 
   static VideoQuality fromCode(int code) => _codeMap[code]!;
+
+  /// “自动”画质的哨兵码(0 不对应任何真实清晰度),存入默认画质偏好中表示
+  /// 按网速自适应选档。运行期一律解析为真实清晰度,不会出现在 [values] 里。
+  static const int autoCode = 0;
+
+  /// 供 UI 显示:哨兵码返回“自动”,否则返回对应清晰度描述。
+  static String descOf(int code) =>
+      code == autoCode ? '自动' : (_codeMap[code]?.desc ?? '自动');
 }

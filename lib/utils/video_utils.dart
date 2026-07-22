@@ -1,8 +1,11 @@
+import 'package:PiliPlus/http/browser_ua.dart';
+import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
 import 'package:PiliPlus/models_new/live/live_room_play_info/codec.dart';
 import 'package:PiliPlus/utils/extension/iterable_ext.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart' show kDebugMode, debugPrint;
 
 abstract final class VideoUtils {
@@ -88,6 +91,47 @@ abstract final class VideoUtils {
         : Uri.parse(mcdnUpgcxcode)
               .replace(host: defaultCDNService.host ?? CDNService.ali.host)
               .toString();
+  }
+
+  /// 主动测速:对目标 CDN 发一个小 Range 请求,估算下行带宽(kbps)。
+  /// 用于“自动”画质在开播前选档。失败/超时返回 null(交由调用方保守兜底)。
+  /// 使用独立的 Dio,避开主客户端的 cookie / wbi 拦截器对裸 CDN 请求的干扰。
+  static Future<int?> probeBandwidthKbps(String url) async {
+    if (url.isEmpty) return null;
+    const int probeBytes = 256 * 1024; // 256KB 样本,快慢网都能在数秒内测完
+    final dio = Dio(
+      BaseOptions(
+        responseType: ResponseType.bytes,
+        connectTimeout: const Duration(seconds: 3),
+        receiveTimeout: const Duration(seconds: 5),
+        headers: {
+          'User-Agent': BrowserUa.pc,
+          'Referer': HttpString.baseUrl,
+          'Range': 'bytes=0-${probeBytes - 1}',
+        },
+      ),
+    );
+    try {
+      final sw = Stopwatch()..start();
+      final resp = await dio
+          .get<List<int>>(url)
+          .timeout(const Duration(seconds: 6));
+      sw.stop();
+      final int bytes = resp.data?.length ?? 0;
+      final int ms = sw.elapsedMilliseconds;
+      // 样本太小或耗时异常则不可信
+      if (bytes < 32 * 1024 || ms <= 0) return null;
+      final int kbps = ((bytes * 8) / ms).round(); // bytes*8 bit / ms = kbps
+      if (kDebugMode) {
+        debugPrint('[autoQa] probe $bytes bytes / $ms ms ≈ $kbps kbps');
+      }
+      return kbps;
+    } catch (e) {
+      if (kDebugMode) debugPrint('[autoQa] probe failed: $e');
+      return null;
+    } finally {
+      dio.close(force: true);
+    }
   }
 
   static String getLiveCdnUrl(CodecItem e, {int index = 0}) {

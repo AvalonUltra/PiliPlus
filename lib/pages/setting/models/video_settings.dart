@@ -86,15 +86,14 @@ List<SettingsModel> get videoSettings => [
   NormalModel(
     title: '默认画质',
     leading: const Icon(Icons.video_settings_outlined),
-    getSubtitle: () =>
-        '当前画质：${VideoQuality.fromCode(Pref.defaultVideoQa).desc}',
+    getSubtitle: () => '当前画质：${VideoQuality.descOf(Pref.defaultVideoQa)}',
     onTap: _showVideoQaDialog,
   ),
   NormalModel(
     title: '蜂窝网络画质',
     leading: const Icon(Icons.video_settings_outlined),
     getSubtitle: () =>
-        '当前画质：${VideoQuality.fromCode(Pref.defaultVideoQaCellular).desc}',
+        '当前画质：${VideoQuality.descOf(Pref.defaultVideoQaCellular)}',
     onTap: _showVideoCellularQaDialog,
   ),
   NormalModel(
@@ -237,7 +236,10 @@ Future<void> _showVideoQaDialog(
     builder: (context) => SelectDialog<int>(
       title: '默认画质',
       value: Pref.defaultVideoQa,
-      values: VideoQuality.values.map((e) => (e.code, e.desc)).toList(),
+      values: [
+        (VideoQuality.autoCode, '自动（根据网速自动选择）'),
+        ...VideoQuality.values.map((e) => (e.code, e.desc)),
+      ],
     ),
   );
   if (res != null) {
@@ -255,7 +257,10 @@ Future<void> _showVideoCellularQaDialog(
     builder: (context) => SelectDialog<int>(
       title: '蜂窝网络画质',
       value: Pref.defaultVideoQaCellular,
-      values: VideoQuality.values.map((e) => (e.code, e.desc)).toList(),
+      values: [
+        (VideoQuality.autoCode, '自动（根据网速自动选择）'),
+        ...VideoQuality.values.map((e) => (e.code, e.desc)),
+      ],
     ),
   );
   if (res != null) {

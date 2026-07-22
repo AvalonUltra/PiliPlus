@@ -66,7 +66,10 @@ class _DownloadPanelState extends State<DownloadPanel> {
   final ListController _listController = ListController();
 
   late final cidSet = widget.cidSet;
-  VideoQuality _quality = VideoQuality.fromCode(Pref.defaultVideoQa);
+  // 下载不支持“自动”画质,遇到哨兵码时退回 1080P
+  VideoQuality _quality = Pref.defaultVideoQa == VideoQuality.autoCode
+      ? VideoQuality.high1080
+      : VideoQuality.fromCode(Pref.defaultVideoQa);
 
   @override
   void initState() {

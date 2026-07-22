@@ -833,6 +833,8 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
                       final int quality = item.quality!;
                       final newQa = VideoQuality.fromCode(quality);
                       videoDetailController
+                        ..plPlayerController.isAutoVideoQa = false
+                        ..plPlayerController.autoQaCap = null
                         ..plPlayerController.cacheVideoQa = newQa.code
                         ..currentVideoQa.value = newQa
                         ..updatePlayer();

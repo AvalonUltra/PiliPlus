@@ -12,6 +12,7 @@ import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/audio_normalization.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
+import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
@@ -374,8 +375,29 @@ class PlPlayerController with BlockConfigMixin {
 
   late final bool tempPlayerConf = Pref.tempPlayerConf;
 
-  late int? cacheVideoQa = PlatformUtils.isMobile ? null : Pref.defaultVideoQa;
+  late int? cacheVideoQa = PlatformUtils.isMobile
+      ? null
+      : (Pref.defaultVideoQa == VideoQuality.autoCode
+            ? VideoQuality.high1080.code // 桌面端自动的真实兜底档
+            : Pref.defaultVideoQa);
   late int cacheAudioQa = Pref.defaultAudioQa;
+
+  /// 是否启用“自动”画质(按实测网速自适应选档)。移动端在拉取 playurl 时按
+  /// 网络类型(WiFi/蜂窝)对应的偏好重设,桌面端直接读默认画质偏好。
+  late bool isAutoVideoQa =
+      !PlatformUtils.isMobile && Pref.defaultVideoQa == VideoQuality.autoCode;
+
+  /// 自动画质的降档上限(真实清晰度 code);卡顿降档后设置,null 表示不限。
+  int? autoQaCap;
+
+  /// 断流恢复:持续开流失败时回源重拉新 playurl 续播(由视频页注入)。
+  Future<void> Function()? onRefetchUrl;
+
+  /// 自动画质卡顿降档:反复缓冲时降低一档并重载(由视频页注入)。
+  Future<void> Function()? onAutoStepDown;
+
+  /// 自动画质卡顿计数窗口
+  final List<int> _autoStallTs = [];
   bool enableHeart = true;
   late final String? hwdec = Pref.enableHA ? Pref.hardwareDecoding : null;
 
@@ -1042,6 +1064,18 @@ class PlPlayerController with BlockConfigMixin {
     );
   }
 
+  /// 自动画质卡顿累计:45s 窗口内缓冲 ≥3 次则触发降档
+  void _recordAutoStall() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _autoStallTs
+      ..add(now)
+      ..removeWhere((t) => now - t > 45000);
+    if (_autoStallTs.length >= 3) {
+      _autoStallTs.clear();
+      onAutoStepDown?.call();
+    }
+  }
+
   Future<void>? refreshPlayer() {
     if (dataSource is FileSource) {
       return null;
@@ -1183,6 +1217,10 @@ class PlPlayerController with BlockConfigMixin {
           buffering,
           isLive,
         );
+        // 自动画质:反复缓冲说明当前档超出网速,累计触发降档(排除拖动引起的缓冲)
+        if (buffering && isAutoVideoQa && !isLive && !isSeeking.value) {
+          _recordAutoStall();
+        }
       }),
       if (kDebugMode)
         stream.log.listen(((PlayerLog log) {
@@ -1226,7 +1264,14 @@ class PlPlayerController with BlockConfigMixin {
                     '视频链接打开失败，重试中',
                     displayTime: const Duration(milliseconds: 500),
                   );
-                  refreshPlayer();
+                  // 优先回源重拉新地址:旧地址可能已过期(deadline)或被
+                  // PCDN 节点丢弃,原地重开必然再次失败。无回调时退回原地重开。
+                  final refetch = onRefetchUrl;
+                  if (refetch != null) {
+                    refetch();
+                  } else {
+                    refreshPlayer();
+                  }
                 }
               });
             },
