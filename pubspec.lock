@@ -223,11 +223,9 @@ packages:
   canvas_danmaku:
     dependency: "direct main"
     description:
-      path: "."
-      ref: main
-      resolved-ref: "697d4516df2fc3ba7417c7ce9aba079d34ba13e5"
-      url: "https://github.com/bggRGjQaUbCoE/canvas_danmaku.git"
-    source: git
+      path: "third_party/canvas_danmaku"
+      relative: true
+    source: path
     version: "0.2.6"
   catcher_2:
     dependency: "direct main"

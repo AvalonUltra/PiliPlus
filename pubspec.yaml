@@ -173,6 +173,9 @@ dependencies:
       ref: main
 
 dependency_overrides:
+  # 本地 vendor:为弹幕绘制加字体回退链(dart:ui 直绘不走主题,生僻字会变豆腐块)
+  canvas_danmaku:
+    path: third_party/canvas_danmaku
   flutter_inappwebview_android:
     git:
       url: https://github.com/bggRGjQaUbCoE/flutter_inappwebview.git

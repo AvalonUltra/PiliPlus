@@ -29,6 +29,7 @@ import 'package:PiliPlus/utils/storage_key.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
 import 'package:PiliPlus/utils/theme_utils.dart';
 import 'package:PiliPlus/utils/utils.dart';
+import 'package:canvas_danmaku/utils/utils.dart' show DmUtils;
 import 'package:catcher_2/catcher_2.dart';
 import 'package:collection/collection.dart';
 import 'package:dynamic_color/dynamic_color.dart';
@@ -91,6 +92,13 @@ Future<void> _initAppPath() async {
 void main() async {
   ScaledWidgetsFlutterBinding.ensureInitialized();
   MediaKit.ensureInitialized();
+  // 弹幕经 dart:ui 直接绘制,不走主题字体链,需单独挂字体补生僻字
+  // (视频弹幕与直播弹幕共用同一渲染库,设置一次即可覆盖两者)。
+  // 主字体必须显式指定:否则回退链首项会被当成主字体,整体字形被接管。
+  if (Platform.isIOS || Platform.isMacOS) {
+    DmUtils.fontFamily = 'CupertinoSystemText';
+    DmUtils.fontFamilyFallback = const ['BabelStone Han'];
+  }
   await _initAppPath();
   try {
     await GStorage.init();
