@@ -236,12 +236,14 @@ class _Item extends StatelessWidget {
                 ),
               ),
             ),
-            NetworkImgLayer(
-              src: item.face,
-              width: 42,
-              height: 42,
-              type: .avatar,
-            ),
+            // 风控态下接口常不返回头像,此时不占位,避免一排空的暗色圆框
+            if (item.face?.isNotEmpty == true)
+              NetworkImgLayer(
+                src: item.face,
+                width: 42,
+                height: 42,
+                type: .avatar,
+              ),
             Expanded(child: child),
             if (showScore)
               Text(
