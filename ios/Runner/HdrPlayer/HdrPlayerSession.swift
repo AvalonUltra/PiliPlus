@@ -38,6 +38,24 @@ final class HdrPlayerSession: NSObject {
         player.actionAtItemEnd = .pause
     }
 
+    /// The audio session is process-wide state. Switching to this backend
+    /// disposes the media_kit player, which tears down the `.playback`
+    /// category it had installed; without re-arming it the session falls back
+    /// to `.soloAmbient`, where the ring/silent switch mutes playback outright
+    /// and audio stops in the background. AVPlayer itself never configures
+    /// this, so every session must claim it before attaching an item.
+    private func activateAudioSession() {
+        let session = AVAudioSession.sharedInstance()
+        do {
+            try session.setCategory(.playback, mode: .moviePlayback)
+            try session.setActive(true)
+        } catch {
+            // Non-fatal: playback still works through the speaker in most
+            // states, only silent-switch/background behaviour degrades.
+            NSLog("[HdrPlayer] audio session setup failed: \(error)")
+        }
+    }
+
     // MARK: - Public control surface
 
     func open(
@@ -54,6 +72,7 @@ final class HdrPlayerSession: NSObject {
         variants: [DashHlsBridge.VariantInput]? = nil
     ) {
         setFitMode(fitMode)
+        activateAudioSession()
         pendingStartMs = startMs
         let bridge = DashHlsBridge(headers: headers)
         self.bridge = bridge
@@ -133,6 +152,9 @@ final class HdrPlayerSession: NSObject {
     func play() {
         playWhenReady = true
         guard item != nil else { return }
+        // Re-arm: an interruption (call, another app) can deactivate the
+        // session while this item stays loaded.
+        activateAudioSession()
         player.playImmediately(atRate: desiredRate)
     }
 
