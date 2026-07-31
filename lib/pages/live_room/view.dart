@@ -569,11 +569,14 @@ class _LiveRoomPageState extends State<LiveRoomPage>
                     spacing: 10,
                     mainAxisSize: .min,
                     children: [
+                      // 拿不到头像(或加载失败)时不占位,避免顶部留一个
+                      // 空的暗色圆框;有头像时照常显示
                       NetworkImgLayer(
                         width: 34,
                         height: 34,
                         type: ImageType.avatar,
                         src: roomInfoH5.anchorInfo!.baseInfo!.face,
+                        getPlaceHolder: () => const SizedBox.shrink(),
                       ),
                       Flexible(
                         child: Column(
