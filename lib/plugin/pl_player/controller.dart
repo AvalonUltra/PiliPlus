@@ -1450,6 +1450,15 @@ class PlPlayerController with BlockConfigMixin {
   }
 
   bool _isAndroidHdrAudioError(String event) {
+    if (Platform.isIOS) {
+      // iOS 侧已给出权威判断(仅 fLaC/Opus 等 AVPlayer 确实无法解码的音轨),
+      // 由后端转成 AUDIO_RENDERER_ERROR 标记,这里只认该标记。
+      //
+      // 不能对整条错误串做关键词匹配:该串还拼入了 URI 与 errorComment,
+      // 'ec-3'/'eac3'/'audio/' 极易误命中——杜比视界的音轨本就是 EC-3——
+      // 一旦误判就会丢掉音轨重建播放器,表现为 HDR 视频完全没有声音。
+      return event.contains('AUDIO_RENDERER_ERROR');
+    }
     final text = event.toLowerCase();
     return text.contains('audio_renderer_error') ||
         text.contains('audiorenderer') ||
