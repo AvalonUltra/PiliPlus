@@ -84,10 +84,7 @@ class NetworkImgLayer extends StatelessWidget {
       placeholder: (_, _) =>
           getPlaceHolder?.call() ??
           _placeholder(context, isEmote: isEmote, isAvatar: isAvatar),
-      // 加载失败时同样尊重调用方指定的占位符:调用方传了
-      // SizedBox.shrink() 即表示“没有就别占位”,不该再回落成默认的暗色方框
       errorWidget: (_, _, _) =>
-          getPlaceHolder?.call() ??
           _placeholder(context, isEmote: isEmote, isAvatar: isAvatar),
       colorBlendMode: reduce ? BlendMode.modulate : null,
       color: reduce ? reduceLuxColor : null,
