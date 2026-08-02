@@ -19,6 +19,31 @@ abstract final class DmUtils {
   /// 描边与内容必须使用同一字体,否则两层会因宽度不一致而错位。
   static List<String>? fontFamilyFallback;
 
+  /// 回退字体(BabelStone Han 一类的全覆盖字体)体积巨大、字形数以万计,
+  /// 挂给每一条弹幕会让字形图集持续膨胀 —— 直播间这种高频、长时间、字符
+  /// 高度分散的场景下会一路涨到渲染失败,表现为弹幕滚一阵后不再滚动。
+  /// 因此只对确实含生僻字的弹幕启用回退链,其余弹幕保持系统默认字体。
+  static bool _needsFallback(String text) {
+    for (final rune in text.runes) {
+      // CJK 扩展 A(BMP 内)与扩展 B 及以上(增补平面)——系统字体常缺这些
+      if ((rune >= 0x3400 && rune <= 0x4DBF) ||
+          (rune >= 0x20000 && rune <= 0x3FFFF)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// 返回该条弹幕应使用的 (主字体, 回退链);普通弹幕返回 (null, null),
+  /// 与未接入回退字体前的行为完全一致。
+  static (String?, List<String>?) _fontsFor(String text) {
+    final fallback = fontFamilyFallback;
+    if (fallback == null || fallback.isEmpty || !_needsFallback(text)) {
+      return (null, null);
+    }
+    return (fontFamily, fallback);
+  }
+
   static double devicePixelRatio = 1;
   static final Paint _selfSendPaint = Paint()
     ..style = PaintingStyle.stroke
@@ -40,13 +65,15 @@ abstract final class DmUtils {
       maxLines: 1,
     ));
 
+    final (family, fallback) = _fontsFor(content.text);
+
     if (content.count case final count?) {
       builder
         ..pushStyle(ui.TextStyle(
           color: content.color,
           fontSize: fontSize * 0.6,
-          fontFamily: fontFamily,
-          fontFamilyFallback: fontFamilyFallback,
+          fontFamily: family,
+          fontFamilyFallback: fallback,
         ))
         ..addText('($count)')
         ..pop();
@@ -56,8 +83,8 @@ abstract final class DmUtils {
       ..pushStyle(ui.TextStyle(
         color: content.color,
         fontSize: fontSize,
-        fontFamily: fontFamily,
-        fontFamilyFallback: fontFamilyFallback,
+        fontFamily: family,
+        fontFamilyFallback: fallback,
       ))
       ..addText(content.text);
 
@@ -106,13 +133,16 @@ abstract final class DmUtils {
         strokePaint.color = Colors.black;
       }
 
+      // 必须与内容层解析出同一套字体,否则描边与文字宽度不一致会错位
+      final (family, fallback) = _fontsFor(content.text);
+
       if (content.count case final count?) {
         builder
           ..pushStyle(ui.TextStyle(
             fontSize: fontSize * 0.6,
             foreground: strokePaint,
-            fontFamily: fontFamily,
-            fontFamilyFallback: fontFamilyFallback,
+            fontFamily: family,
+            fontFamilyFallback: fallback,
           ))
           ..addText('($count)')
           ..pop();
@@ -122,8 +152,8 @@ abstract final class DmUtils {
         ..pushStyle(ui.TextStyle(
           fontSize: fontSize,
           foreground: strokePaint,
-          fontFamily: fontFamily,
-          fontFamilyFallback: fontFamilyFallback,
+          fontFamily: family,
+          fontFamilyFallback: fallback,
         ))
         ..addText(content.text);
 

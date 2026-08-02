@@ -509,7 +509,17 @@ class LiveRoomController extends GetxController {
   void addDm(dynamic msg, [DanmakuContentItem<DanmakuExtra>? item]) {
     if (plPlayerController.showDanmaku) {
       if (item != null && plPlayerController.enableShowLiveDanmaku.value) {
-        danmakuController?.addDanmaku(item);
+        // 单条弹幕渲染失败(字形光栅化等)不能中断整条消息流:上游
+        // _processingData 用 catch(_) 吞异常,一旦抛出,这批数据包的
+        // 后续消息连同下面的聊天列表都会被静默丢弃,表现为弹幕突然
+        // 不再滚动且无法自行恢复。
+        try {
+          danmakuController?.addDanmaku(item);
+        } catch (e, s) {
+          if (kDebugMode) {
+            debugPrint('addDanmaku failed: $e\n$s');
+          }
+        }
       }
       if (autoScroll && !disableAutoScroll.value) {
         messages.add(msg);
