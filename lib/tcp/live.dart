@@ -159,6 +159,14 @@ class LiveMessageStream {
   Timer? _timer;
   final String logTag = "LiveStreamService";
 
+  /// 连接是否仍然存活。断线(onDone/onError)会走 [close] 把它置为 false,
+  /// 持有方据此判断需要重建——否则只凭“对象非空”会误以为流还在工作。
+  bool get isActive => _active;
+
+  /// 断线通知。本类自身不重连(认证 token 等状态由持有方掌握),
+  /// 由持有方决定何时重建。
+  void Function()? onDisconnect;
+
   Future<void> init() async {
     final authPackage = AuthPackage(
       header: const PackageHeader(
@@ -201,8 +209,8 @@ class LiveMessageStream {
       //   ..d('$logTag ===> 发送认证包');
       _socketSubscription = _channel?.stream.listen(
         onData,
-        onDone: close,
-        onError: (_) => close(),
+        onDone: _handleDisconnect,
+        onError: (_) => _handleDisconnect(),
       );
       _channel?.sink.add(authPackage.marshal());
     } catch (e) {
@@ -297,6 +305,15 @@ class LiveMessageStream {
         _processingData(decompressedData);
       } catch (_) {}
     }
+  }
+
+  /// 被动断线(服务端关闭 / 网络错误)。与主动 [close] 区分开:
+  /// 只有非主动关闭才需要通知持有方重建连接。
+  void _handleDisconnect() {
+    if (!_active) return;
+    final notify = onDisconnect;
+    close();
+    notify?.call();
   }
 
   void close() {

@@ -385,6 +385,8 @@ class LiveRoomController extends GetxController {
   }
 
   void closeLiveMsg() {
+    _msgReconnectTimer?.cancel();
+    _msgReconnectTimer = null;
     _msgStream?.close();
     _msgStream = null;
   }
@@ -422,8 +424,13 @@ class LiveRoomController extends GetxController {
         getSuperChatMsg();
       }
     }
-    if (_msgStream != null) {
-      return;
+    // 仅当连接确实还活着才跳过:已断开的流对象不能算数,否则永不重连
+    if (_msgStream case final stream?) {
+      if (stream.isActive) {
+        return;
+      }
+      stream.close();
+      _msgStream = null;
     }
     if (dmInfo != null) {
       initDm(dmInfo!);
@@ -503,7 +510,24 @@ class LiveRoomController extends GetxController {
                 .toList(),
           )
           ..addEventListener(_danmakuListener)
+          ..onDisconnect = _onMsgStreamDisconnect
           ..init();
+  }
+
+  Timer? _msgReconnectTimer;
+
+  /// 弹幕长连接断开后自动重连。此前断线只是把连接清理掉,而 [_msgStream]
+  /// 引用仍非空,导致 [startLiveMsg] 认为“流还在”而直接返回 —— 弹幕与
+  /// 聊天列表就此永久停住,切走再回来也恢复不了。
+  void _onMsgStreamDisconnect() {
+    _msgStream = null;
+    _msgReconnectTimer?.cancel();
+    _msgReconnectTimer = Timer(const Duration(seconds: 2), () {
+      if (isClosed || _msgStream != null) return;
+      // token 可能已失效,丢弃缓存让 startLiveMsg 重新申请
+      dmInfo = null;
+      startLiveMsg();
+    });
   }
 
   void addDm(dynamic msg, [DanmakuContentItem<DanmakuExtra>? item]) {
