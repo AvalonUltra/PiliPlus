@@ -175,6 +175,9 @@ class AccountManager extends Interceptor {
       'hdslb.com',
       'biliimg.com',
       'site/getCoin',
+      // 高能进度条数据,B 站该接口现已恒返回 404。属可选装饰功能,
+      // 取不到时只是不画热力曲线,不该用 toast 打扰用户
+      'pbp/data',
     ];
     String url = err.requestOptions.uri.toString();
     if (kDebugMode) debugPrint('🌹🌹ApiInterceptor: $url');
