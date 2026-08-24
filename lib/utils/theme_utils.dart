@@ -39,19 +39,22 @@ abstract final class ThemeUtils {
     final fontWeight = appFontWeight == -1
         ? null
         : FontWeight.values[appFontWeight];
-    late final textStyle = TextStyle(fontWeight: fontWeight);
-    // 仅 Apple 平台:显式钉住系统字体为主字体,BabelStone Han 只作末位回退,
-    // 兜住系统缺失的生僻字(扩展 B-H 区)。不指定主字体时,fallback 首项会被
-    // 当成主字体,导致 BabelStone Han(自带拉丁字形)整体接管正文。
+    final font = Pref.appFont;
+    final changeStyle = font == null && fontWeight == null;
+    late final textStyle = TextStyle(fontWeight: fontWeight, fontFamily: font);
+    // 仅 Apple 平台:BabelStone Han 只作末位回退,兜住系统缺失的生僻字
+    // (扩展 B-H 区)。主字体必须显式指定——不指定时回退链首项会被当成
+    // 主字体,导致 BabelStone Han(自带拉丁字形)整体接管正文。
+    // 用户在设置里选了字体则以其为主字体,否则钉住系统字体。
     final bool isApple =
         defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS;
     ThemeData theme = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
-      fontFamily: isApple ? 'CupertinoSystemText' : null,
+      fontFamily: font ?? (isApple ? 'CupertinoSystemText' : null),
       fontFamilyFallback: isApple ? const ['BabelStone Han'] : null,
-      textTheme: fontWeight == null
+      textTheme: changeStyle
           ? null
           : TextTheme(
               displayLarge: textStyle,
@@ -70,9 +73,7 @@ abstract final class ThemeUtils {
               labelMedium: textStyle,
               labelSmall: textStyle,
             ),
-      tabBarTheme: fontWeight == null
-          ? null
-          : TabBarThemeData(labelStyle: textStyle),
+      tabBarTheme: changeStyle ? null : TabBarThemeData(labelStyle: textStyle),
       appBarTheme: AppBarTheme(
         elevation: 0,
         titleSpacing: 0,
@@ -82,6 +83,7 @@ abstract final class ThemeUtils {
         titleTextStyle: TextStyle(
           fontSize: 16,
           color: colorScheme.onSurface,
+          fontFamily: font,
           fontWeight: fontWeight,
         ),
       ),
@@ -115,6 +117,7 @@ abstract final class ThemeUtils {
       dialogTheme: DialogThemeData(
         titleTextStyle: TextStyle(
           fontSize: 18,
+          fontFamily: font,
           fontWeight: fontWeight,
           color: colorScheme.onSurface,
         ),
