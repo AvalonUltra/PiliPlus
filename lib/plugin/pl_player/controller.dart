@@ -955,7 +955,6 @@ class PlPlayerController with BlockConfigMixin {
       'stream-lavf-o':
           'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
-      'stream-lavf-o': 'reconnect=1',
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
               .toString(),
