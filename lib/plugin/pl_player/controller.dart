@@ -955,6 +955,7 @@ class PlPlayerController with BlockConfigMixin {
       'stream-lavf-o':
           'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
+      'stream-lavf-o': 'reconnect=1',
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
               .toString(),
@@ -1297,6 +1298,15 @@ class PlPlayerController with BlockConfigMixin {
               });
             },
           );
+        } else if (event.contains('Invalid NAL unit size') ||
+            event.contains('Error splitting the input into NAL') ||
+            event.contains('Stream ends prematurely')) {
+          EasyThrottle.throttle(
+            'controllerStream.nal.error',
+            const Duration(milliseconds: 5000),
+            refreshPlayer,
+          );
+          Utils.reportError(event);
         } else if (event.startsWith('Could not open codec')) {
           SmartDialog.showToast('无法加载解码器, $event，可能会切换至软解');
         } else if (!onlyPlayAudio.value) {
