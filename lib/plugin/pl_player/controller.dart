@@ -71,7 +71,7 @@ import 'package:window_manager/window_manager.dart';
 
 typedef PlayCallback = Future<void>? Function();
 
-class PlPlayerController with BlockConfigMixin {
+class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   Player? _videoPlayerController;
   VideoController? _videoController;
   AndroidHdrPlaybackBackend? _androidHdrBackend;
@@ -640,12 +640,6 @@ class PlPlayerController with BlockConfigMixin {
   // offline
   bool get isFileSource => dataSource is FileSource;
 
-  late final _audioNormalization = Pref.audioNormalization;
-  late final enableAudioNormalization =
-      Platform.isAndroid && _audioNormalization != '0';
-  late final String _audioNormalizationParam =
-      AudioNormalization.getParamFromConfig(_audioNormalization);
-
   // 初始化资源
   Future<void> setDataSource(
     DataSource dataSource, {
@@ -796,8 +790,6 @@ class PlPlayerController with BlockConfigMixin {
         ]);
     }
   }
-
-  static final loudnormRegExp = RegExp('loudnorm=([^,]+)');
 
   static const Set<int> _hdrQualityCodes = {
     125,
@@ -1044,31 +1036,7 @@ class PlPlayerController with BlockConfigMixin {
             // '!delay_open,media_type=audio;'
             '%${isFileSource ? utf8.encode(audio).length : audio.length}%$audio');
       }
-      if (enableAudioNormalization) {
-        final String audioNormalization;
-        if (volume != null && volume.isNotEmpty) {
-          audioNormalization = _audioNormalizationParam.replaceFirstMapped(
-            loudnormRegExp,
-            (i) =>
-                'loudnorm=${volume.format(
-                  Map.fromEntries(
-                    i.group(1)!.split(':').map((item) {
-                      final parts = item.split('=');
-                      return MapEntry(parts[0].toLowerCase(), num.parse(parts[1]));
-                    }),
-                  ),
-                )}',
-          );
-        } else {
-          audioNormalization = _audioNormalizationParam.replaceFirst(
-            loudnormRegExp,
-            AudioNormalization.getParamFromConfig(Pref.fallbackNormalization),
-          );
-        }
-        if (audioNormalization.isNotEmpty) {
-          extras['lavfi-complex'] = '"[aid1] $audioNormalization [ao]"';
-        }
-      }
+      audioFilterExtras(volume, map: extras);
     }
 
     await player.open(

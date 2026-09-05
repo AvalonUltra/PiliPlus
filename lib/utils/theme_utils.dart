@@ -33,16 +33,31 @@ abstract final class ThemeUtils {
     required bool isDynamic,
     bool isDark = false,
   }) {
-    final appFontWeight = Pref.appFontWeight.clamp(
-      -1,
-      FontWeight.values.length - 1,
-    );
-    final fontWeight = appFontWeight == -1
-        ? null
-        : FontWeight.values[appFontWeight];
+    final fontWeight = Pref.appFontWeight;
     final fontFamily = FontUtils.fontFamily;
-    final noCustomText = fontFamily == null && fontWeight == null;
-    late final textStyle = TextStyle(fontWeight: fontWeight);
+
+    TextTheme? textTheme;
+    if (fontWeight != .normal) {
+      final textStyle = TextStyle(fontWeight: fontWeight);
+      textTheme = TextTheme(
+        displayLarge: textStyle,
+        displayMedium: textStyle,
+        displaySmall: textStyle,
+        headlineLarge: textStyle,
+        headlineMedium: textStyle,
+        headlineSmall: textStyle,
+        titleLarge: textStyle,
+        titleMedium: textStyle,
+        titleSmall: textStyle,
+        bodyLarge: textStyle,
+        bodyMedium: textStyle,
+        bodySmall: textStyle,
+        labelLarge: textStyle,
+        labelMedium: textStyle,
+        labelSmall: textStyle,
+      );
+    }
+
     // 仅 Apple 平台:BabelStone Han 只作末位回退,兜住系统缺失的生僻字
     // (扩展 B-H 区)。主字体必须显式指定——不指定时回退链首项会被当成
     // 主字体,导致 BabelStone Han(自带拉丁字形)整体接管正文。
@@ -50,31 +65,13 @@ abstract final class ThemeUtils {
     final bool isApple =
         defaultTargetPlatform == TargetPlatform.iOS ||
         defaultTargetPlatform == TargetPlatform.macOS;
-    ThemeData theme = ThemeData(
+
+    final theme = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
       fontFamily: fontFamily ?? (isApple ? 'CupertinoSystemText' : null),
       fontFamilyFallback: isApple ? const ['BabelStone Han'] : null,
-      textTheme: noCustomText
-          ? null
-          : TextTheme(
-              displayLarge: textStyle,
-              displayMedium: textStyle,
-              displaySmall: textStyle,
-              headlineLarge: textStyle,
-              headlineMedium: textStyle,
-              headlineSmall: textStyle,
-              titleLarge: textStyle,
-              titleMedium: textStyle,
-              titleSmall: textStyle,
-              bodyLarge: textStyle,
-              bodyMedium: textStyle,
-              bodySmall: textStyle,
-              labelLarge: textStyle,
-              labelMedium: textStyle,
-              labelSmall: textStyle,
-            ),
-      tabBarTheme: noCustomText ? null : TabBarThemeData(labelStyle: textStyle),
+      textTheme: textTheme,
       appBarTheme: AppBarTheme(
         elevation: 0,
         titleSpacing: 0,
