@@ -177,6 +177,13 @@ final class DashHlsBridge: NSObject {
             }
         }
         guard !loaded.isEmpty else { throw DashHlsError.parse("all variants failed to load") }
+        // In an ABR ladder, drop variants whose video codec we can't identify
+        // (AV1 and anything else undeclared): AVPlayer can't screen them against
+        // device decode support, and switching onto one yields a black picture.
+        if loaded.count > 1 {
+            let known = loaded.filter { $0.1.codec != nil }
+            if !known.isEmpty { loaded = known }
+        }
         // Preserve caller order (highest→lowest as sent); assign stable tags.
         loaded.sort { $0.0 < $1.0 }
         var tracks: [Track] = []
@@ -411,10 +418,14 @@ final class DashHlsBridge: NSObject {
             let peak = peakRate(video) + audioPeak
             let bandwidth = peak > 0 ? Int(peak) : 10_000_000
             streamInf.append("BANDWIDTH=\(max(bandwidth, 1))")
-            var codecs: [String] = []
-            if let codec = video.codec { codecs.append(codec) }
-            if let audio, let codec = audio.codec { codecs.append(codec) }
-            if !codecs.isEmpty {
+            // Only declare CODECS when the video codec is known. Listing just the
+            // audio codec (e.g. for av01, whose RFC string we don't derive) tells
+            // AVPlayer the variant is audio-only: it plays sound and advances time
+            // but never loads the video track — reproduced locally. Omitting the
+            // attribute lets AVPlayer probe the media as originally intended.
+            if let videoCodec = video.codec {
+                var codecs = [videoCodec]
+                if let audio, let codec = audio.codec { codecs.append(codec) }
                 streamInf.append("CODECS=\"\(codecs.joined(separator: ","))\"")
             }
             if video.width > 0, video.height > 0 {

@@ -952,15 +952,27 @@ class VideoDetailController extends GetxController
             .toSet()
             .toList()
           ..sort((a, b) => b.compareTo(a)); // 高→低
+    // AVPlayer 只可靠支持 AVC / HEVC:AV1 仅 A17 Pro 及以上才有硬解,且桥接无法
+    // 为其生成 CODECS,选中后会被当成纯音频变体 —— 有声、进度走、画面全黑。
+    // 默认编码偏好是 [AVC, AV1],高清晰度常无 AVC 流时 currentDecodeFormats 会
+    // 落到 AV1,故原生 ABR 一律改用 HEVC 作阶梯主编码(iPhone 全系硬解)。
+    final primary = currentDecodeFormats == VideoDecodeFormatType.AVC
+        ? VideoDecodeFormatType.AVC
+        : VideoDecodeFormatType.HEVC;
+    final fallback = primary == VideoDecodeFormatType.AVC
+        ? VideoDecodeFormatType.HEVC
+        : VideoDecodeFormatType.AVC;
+    bool isFamily(VideoItem e, VideoDecodeFormatType f) =>
+        f.codes.any((c) => e.codecs?.startsWith(c) ?? false);
+
     final variants = <HdrVariant>[];
     for (final code in codes) {
       final items = videos.where((e) => e.quality.code == code);
-      final chosen = items.firstWhere(
-        (e) => currentDecodeFormats.codes.any(
-          (c) => e.codecs?.startsWith(c) ?? false,
-        ),
-        orElse: () => items.first,
-      );
+      final chosen =
+          items.firstWhereOrNull((e) => isFamily(e, primary)) ??
+          items.firstWhereOrNull((e) => isFamily(e, fallback));
+      // 该清晰度只有 AV1 等 AVPlayer 不可靠的编码时,不进入码率阶梯
+      if (chosen == null) continue;
       variants.add(
         HdrVariant(
           url: VideoUtils.getCdnUrl(chosen.playUrls),
