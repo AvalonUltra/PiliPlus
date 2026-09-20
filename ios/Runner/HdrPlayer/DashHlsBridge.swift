@@ -142,7 +142,7 @@ final class DashHlsBridge: NSObject {
         // Shared audio track (ABR switches video only; audio stays one group).
         var audio: Track? = nil
         if let audioUrl, !audioUrl.isEmpty {
-            audio = try await loadTrack(url: audioUrl, isFileSource: isFileSource, isVideo: false)
+            audio = try await loadTrack(url: audioUrl, isFileSource: isFileSource, isVideo: false, tag: "a")
             if let codec = audio?.codec, codec.hasPrefix("fLaC") || codec.hasPrefix("Opus") {
                 throw DashHlsError.unsupportedAudio(codec)
             }
@@ -156,7 +156,10 @@ final class DashHlsBridge: NSObject {
             for (i, v) in variants.enumerated() {
                 group.addTask { [self] in
                     do {
-                        var t = try await loadTrack(url: v.url, isFileSource: isFileSource, isVideo: true)
+                        var t = try await loadTrack(
+                            url: v.url, isFileSource: isFileSource, isVideo: true, tag: "v\(i)"
+                        )
+                        t.pathTag = "v\(i)"
                         if t.videoRange != nil || v.qualityCode == 125 || v.qualityCode == 126 {
                             // HDR variants must be labelled PQ (device rejects HLG
                             // with -12927; bitstream colr drives real rendering).
@@ -184,14 +187,12 @@ final class DashHlsBridge: NSObject {
             let known = loaded.filter { $0.1.codec != nil }
             if !known.isEmpty { loaded = known }
         }
-        // Preserve caller order (highest→lowest as sent); assign stable tags.
+        // Preserve caller order (highest→lowest as sent). Tags were fixed at load
+        // time and must stay attached to their own init segment, so don't renumber.
         loaded.sort { $0.0 < $1.0 }
-        var tracks: [Track] = []
-        for (idx, pair) in loaded.enumerated() {
-            var t = pair.1
-            t.pathTag = "v\(idx)"
-            tracks.append(t)
-            playlists["video_\(idx).m3u8"] = mediaPlaylist(for: t, pathTag: t.pathTag)
+        let tracks = loaded.map(\.1)
+        for t in tracks {
+            playlists["video_\(t.pathTag).m3u8"] = mediaPlaylist(for: t, pathTag: t.pathTag)
         }
         videoCodec = tracks.first?.codec
 
@@ -209,7 +210,12 @@ final class DashHlsBridge: NSObject {
 
     // MARK: - Track loading
 
-    private func loadTrack(url: String, isFileSource: Bool, isVideo: Bool) async throws -> Track {
+    /// - Parameter tag: unique per track ("v0", "v1", ... , "a"). Variants are
+    ///   loaded in parallel and each patched init segment is written to disk, so
+    ///   the name must not collide: a shared name means every variant but one
+    ///   ends up pointing at another variant's init segment (black picture), and
+    ///   concurrent writers can tear the file outright.
+    private func loadTrack(url: String, isFileSource: Bool, isVideo: Bool, tag: String) async throws -> Track {
         var track = Track(url: url, isLocal: isFileSource, isVideo: isVideo)
         var data: Data
         if isFileSource {
@@ -219,7 +225,7 @@ final class DashHlsBridge: NSObject {
             track.fileLength = handle.seekToEndOfFile()
             handle.seek(toFileOffset: 0)
             data = handle.readData(ofLength: min(1 << 20, Int(track.fileLength)))
-            localFiles[isVideo ? "v" : "a"] = fileUrl
+            localFiles[tag] = fileUrl
         } else {
             let (head, total) = try await fetchRange(url: url, upTo: 1 << 20)
             data = head
@@ -289,7 +295,7 @@ final class DashHlsBridge: NSObject {
             data = patched
         }
         if let sidxStart {
-            let name = isVideo ? "init_v.mp4" : "init_a.mp4"
+            let name = "init_\(tag).mp4"
             try data.subdata(in: 0 ..< Int(sidxStart))
                 .write(to: playlistDir.appendingPathComponent(name))
             track.localInitName = name
@@ -413,7 +419,7 @@ final class DashHlsBridge: NSObject {
         }
         // One #EXT-X-STREAM-INF per quality — AVPlayer selects & switches among
         // them via native ABR (measured throughput + buffer occupancy).
-        for (idx, video) in variants.enumerated() {
+        for video in variants {
             var streamInf: [String] = []
             let peak = peakRate(video) + audioPeak
             let bandwidth = peak > 0 ? Int(peak) : 10_000_000
@@ -445,7 +451,7 @@ final class DashHlsBridge: NSObject {
                 streamInf.append("AUDIO=\"audio\"")
             }
             lines.append("#EXT-X-STREAM-INF:\(streamInf.joined(separator: ","))")
-            lines.append("video_\(idx).m3u8")
+            lines.append("video_\(video.pathTag).m3u8")
         }
         return lines.joined(separator: "\n").data(using: .utf8)!
     }
