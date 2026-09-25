@@ -522,14 +522,14 @@ class _PostPanelState extends State<PostPanel>
               );
               if (start <= 0) {
                 await seekToEnd();
-                if (!plPlayerController.playerStatus.value.isPlaying) {
+                if (!plPlayerController.playerStatus.isPlaying) {
                   await plPlayerController.play();
                 }
                 return;
               }
               final seek = max(0, start - 2000);
               await plPlayerController.seekTo(Duration(milliseconds: seek));
-              if (!plPlayerController.playerStatus.value.isPlaying) {
+              if (!plPlayerController.playerStatus.isPlaying) {
                 await plPlayerController.play();
               }
               if (start > seek) {

@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:PiliPlus/plugin/pl_player/controller.dart';
 import 'package:PiliPlus/plugin/pl_player/models/play_status.dart';
 import 'package:material_ui/material_ui.dart';
@@ -19,7 +17,15 @@ class PlayOrPauseButton extends StatefulWidget {
 class PlayOrPauseButtonState extends State<PlayOrPauseButton>
     with SingleTickerProviderStateMixin {
   late final AnimationController controller;
-  StreamSubscription? subscription;
+
+  // 走控制器的状态回调而不是 media_kit 的 stream:原生 HDR 后端没有 Player 实例
+  void _onStatus(PlayerStatus status) {
+    if (status == PlayerStatus.playing) {
+      controller.forward();
+    } else {
+      controller.reverse();
+    }
+  }
 
   @override
   void initState() {
@@ -29,18 +35,12 @@ class PlayOrPauseButtonState extends State<PlayOrPauseButton>
       value: widget.plPlayerController.playerStatus.isPlaying ? 1 : 0,
       duration: const Duration(milliseconds: 200),
     );
-    subscription = widget.plPlayerController.playerStatus.listen((status) {
-      if (status == PlayerStatus.playing) {
-        controller.forward();
-      } else {
-        controller.reverse();
-      }
-    });
+    widget.plPlayerController.addStatusLister(_onStatus);
   }
 
   @override
   void dispose() {
-    subscription?.cancel();
+    widget.plPlayerController.removeStatusLister(_onStatus);
     controller.dispose();
     super.dispose();
   }
