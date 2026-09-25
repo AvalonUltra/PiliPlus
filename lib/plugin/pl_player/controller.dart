@@ -697,7 +697,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       }
       cancelLongPressTimer();
       if (playerStatus.isPlaying) {
-        await pause(notify: false);
+        // 换源(切画质/重载)马上会接着播放,不能让出音频焦点:
+        // 停用请求可能在新播放器出声后才落地,导致有画面无声音
+        await pause(notify: false, isInterrupt: true);
       }
 
       if (_playerCount == 0) {
@@ -1588,9 +1590,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       await seekTo(Duration.zero, isSeek: false);
     }
 
-    await (_androidHdrBackend?.play() ?? _videoPlayerController?.play());
+    // 先等激活落地再出声:排在它前面的停用请求(上一次暂停)必须先执行完,
+    // 否则会在播放开始后才生效,把声音掐掉
+    await audioSessionHandler?.setActive(true);
 
-    audioSessionHandler?.setActive(true);
+    await (_androidHdrBackend?.play() ?? _videoPlayerController?.play());
 
     playerStatus = .playing;
   }

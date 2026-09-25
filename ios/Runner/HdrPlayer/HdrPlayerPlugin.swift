@@ -15,6 +15,7 @@ final class HdrPlayerPlugin: NSObject, FlutterStreamHandler {
     private var sink: FlutterEventSink?
 
     static func register(with registrar: FlutterPluginRegistrar) {
+        AudioSessionGuard.install()
         let plugin = HdrPlayerPlugin()
         let channel = FlutterMethodChannel(
             name: channelName,

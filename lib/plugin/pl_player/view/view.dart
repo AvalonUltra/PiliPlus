@@ -42,6 +42,7 @@ import 'package:PiliPlus/plugin/pl_player/models/double_tap_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/fullscreen_mode.dart';
 import 'package:PiliPlus/plugin/pl_player/models/gesture_type.dart';
 import 'package:PiliPlus/plugin/pl_player/models/video_fit_type.dart';
+import 'package:PiliPlus/plugin/pl_player/utils/volume_listener.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/app_bar_ani.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/backward_seek.dart';
 import 'package:PiliPlus/plugin/pl_player/widgets/bottom_control.dart';
@@ -268,13 +269,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
         try {
           FlutterVolumeController.updateShowSystemUI(true);
           _getCurrVolume();
-          FlutterVolumeController.addListener(
-            _onVolumeChanged,
-            // The plugin defaults to ambient and overwrites AVAudioSession.
-            // Keep media playback audible regardless of listener/mpv init order.
-            category: AudioSessionCategory.playback,
-            emitOnStart: false,
-          );
+          VolumeListener.add(_onVolumeChanged);
         } catch (_) {}
 
         try {
@@ -381,7 +376,7 @@ class _PLVideoPlayerState extends State<PLVideoPlayer>
     _transformationController.dispose();
     _removeDmAction();
     if (PlatformUtils.isMobile) {
-      FlutterVolumeController.removeListener();
+      VolumeListener.remove(_onVolumeChanged);
     }
     super.dispose();
   }

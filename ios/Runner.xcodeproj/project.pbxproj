@@ -20,6 +20,7 @@
 		A6C2F8E92FCB1A0000C0D3E1 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = A6C2F8E82FCB1A0000C0D3E1 /* SceneDelegate.swift */; };
 		C9F99A90D6E1A453EF37B823 /* HdrPlayerSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63BF1CEB0D8BBA9F2843C21 /* HdrPlayerSession.swift */; };
 		E1D1A878D263C5462A2103AE /* DashHlsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731B9C6711E5571C747D52AD /* DashHlsBridge.swift */; };
+		A1B2C3D4E5F60718293A4B5C /* AudioSessionGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -45,6 +46,7 @@
 		51DB54E5BB66F8608325A082 /* Pods-Runner.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-Runner.debug.xcconfig"; path = "Target Support Files/Pods-Runner/Pods-Runner.debug.xcconfig"; sourceTree = "<group>"; };
 		63F2789C7C1DF3CD2B80A936 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		731B9C6711E5571C747D52AD /* DashHlsBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DashHlsBridge.swift; sourceTree = "<group>"; };
+		A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioSessionGuard.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
@@ -136,6 +138,7 @@
 				B9A69E6561DCDC0012960420 /* HdrPlayerPlugin.swift */,
 				E63BF1CEB0D8BBA9F2843C21 /* HdrPlayerSession.swift */,
 				731B9C6711E5571C747D52AD /* DashHlsBridge.swift */,
+				A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */,
 				005196380AD94ED5779E9217 /* HdrLocalServer.swift */,
 			);
 			name = HdrPlayer;
@@ -332,6 +335,7 @@
 				752F1D5CC36AA8A764A3AAF1 /* HdrPlayerPlugin.swift in Sources */,
 				C9F99A90D6E1A453EF37B823 /* HdrPlayerSession.swift in Sources */,
 				E1D1A878D263C5462A2103AE /* DashHlsBridge.swift in Sources */,
+				A1B2C3D4E5F60718293A4B5C /* AudioSessionGuard.swift in Sources */,
 				5C09F16C3FEBDF5A1BCD2F3F /* HdrLocalServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

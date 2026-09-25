@@ -6,8 +6,20 @@ class AudioSessionHandler {
   late AudioSession session;
   bool _playInterrupted = false;
 
-  Future<bool> setActive(bool active) {
-    return session.setActive(active);
+  Future<void> _pending = Future.value();
+  bool? _targetActive;
+
+  /// 串行执行,且只落地最后一次请求的状态。
+  /// 插件在后台并发队列里调用 AVAudioSession,不排队的话先发出的停用
+  /// 可能晚于后发出的激活生效,把刚开始播放的声音掐掉。
+  Future<void> setActive(bool active) {
+    _targetActive = active;
+    return _pending = _pending.then((_) async {
+      if (_targetActive != active) return;
+      try {
+        await session.setActive(active);
+      } catch (_) {}
+    });
   }
 
   AudioSessionHandler() {

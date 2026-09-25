@@ -23,7 +23,17 @@ final class HdrPlayerSession: NSObject {
     private var notificationTokens: [NSObjectProtocol] = []
     private var timeObserver: Any?
 
-    private var playWhenReady = false
+    private var playWhenReady = false {
+        didSet {
+            // While this session wants sound, other components must not be
+            // able to deactivate the shared audio session under it.
+            if playWhenReady, !disposed {
+                AudioSessionGuard.hold(self)
+            } else {
+                AudioSessionGuard.release(self)
+            }
+        }
+    }
     private var desiredRate: Float = 1.0
     private var reportedPlaying = false
     private var pendingStartMs: Int64 = 0
@@ -224,6 +234,7 @@ final class HdrPlayerSession: NSObject {
 
     func dispose() {
         disposed = true
+        playWhenReady = false
         stopProgress()
         observations.forEach { $0.invalidate() }
         observations.removeAll()
