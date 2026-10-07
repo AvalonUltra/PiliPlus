@@ -16,5 +16,8 @@ import UIKit
     if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "HdrPlayerPlugin") {
       HdrPlayerPlugin.register(with: registrar)
     }
+    if let registrar = engineBridge.pluginRegistry.registrar(forPlugin: "PipPlugin") {
+      PipPlugin.register(with: registrar)
+    }
   }
 }

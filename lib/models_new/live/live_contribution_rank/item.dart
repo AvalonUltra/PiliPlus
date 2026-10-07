@@ -34,6 +34,6 @@ class LiveContributionRankItem {
         score: json['score'] as int?,
         uinfoMedal: json['uinfo']?['medal'] == null
             ? null
-            : UinfoMedal.fromJson(json['uinfo']?['medal']),
+            : UinfoMedal.fromJson(json['uinfo']['medal']),
       );
 }
