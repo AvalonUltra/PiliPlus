@@ -28,6 +28,19 @@ abstract final class ThemeUtils {
   static String themeUrl(bool isDark) =>
       'native.theme=${isDark ? 2 : 1}&night=${isDark ? 1 : 0}';
 
+  /// Apple 平台的主字体名。引擎默认字体就是这个名字;'CupertinoSystemText'
+  /// 并不是已注册的字体族,一旦配了回退链,链上第一个真实字体就会顶替主字体
+  /// (BabelStone Han 曾因此接管全部正文)。
+  static const appleSystemFont = '.AppleSystemUIFont';
+
+  /// Apple 平台的回退链。Flutter 按字素簇选字体:基字与其上所有组合附加符号
+  /// 必须来自同一个字体,否则整簇变成豆腐块。
+  /// - PingFang SC:中日文先走系统字体,BabelStone Han 只兜底;
+  /// - Arial:含全部组合附加符号及定位,拉丁字母上的“故障文字”在此解析;
+  /// - BabelStone Han:生僻字,以及汉字 + 组合附加符号(打包的字体已补齐
+  ///   附加符号,见 third_party/babelstone_marks)。
+  static const appleFontFallback = ['PingFang SC', 'Arial', 'BabelStone Han'];
+
   static ThemeData getThemeData({
     required ColorScheme colorScheme,
     required bool isDynamic,
@@ -58,9 +71,6 @@ abstract final class ThemeUtils {
       );
     }
 
-    // 仅 Apple 平台:BabelStone Han 只作末位回退,兜住系统缺失的生僻字
-    // (扩展 B-H 区)。主字体必须显式指定——不指定时回退链首项会被当成
-    // 主字体,导致 BabelStone Han(自带拉丁字形)整体接管正文。
     // 用户在设置里选了字体则以其为主字体,否则钉住系统字体。
     final bool isApple =
         defaultTargetPlatform == TargetPlatform.iOS ||
@@ -69,8 +79,8 @@ abstract final class ThemeUtils {
     final theme = ThemeData(
       useMaterial3: true,
       colorScheme: colorScheme,
-      fontFamily: fontFamily ?? (isApple ? 'CupertinoSystemText' : null),
-      fontFamilyFallback: isApple ? const ['BabelStone Han'] : null,
+      fontFamily: fontFamily ?? (isApple ? appleSystemFont : null),
+      fontFamilyFallback: isApple ? appleFontFallback : null,
       textTheme: textTheme,
       appBarTheme: AppBarTheme(
         elevation: 0,

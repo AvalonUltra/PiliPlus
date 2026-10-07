@@ -22,12 +22,21 @@ abstract final class DmUtils {
   /// 回退字体(BabelStone Han 一类的全覆盖字体)体积巨大、字形数以万计,
   /// 挂给每一条弹幕会让字形图集持续膨胀 —— 直播间这种高频、长时间、字符
   /// 高度分散的场景下会一路涨到渲染失败,表现为弹幕滚一阵后不再滚动。
-  /// 因此只对确实含生僻字的弹幕启用回退链,其余弹幕保持系统默认字体。
+  /// 因此只对确实含生僻字或组合附加符号的弹幕启用回退链,其余弹幕保持
+  /// 系统默认字体。
   static bool _needsFallback(String text) {
     for (final rune in text.runes) {
       // CJK 扩展 A(BMP 内)与扩展 B 及以上(增补平面)——系统字体常缺这些
       if ((rune >= 0x3400 && rune <= 0x4DBF) ||
           (rune >= 0x20000 && rune <= 0x3FFFF)) {
+        return true;
+      }
+      // 组合附加符号(“故障文字”):基字与符号须同一字体,系统字体凑不齐
+      if ((rune >= 0x0300 && rune <= 0x036F) ||
+          (rune >= 0x0483 && rune <= 0x0489) ||
+          (rune >= 0x1DC0 && rune <= 0x1DFF) ||
+          (rune >= 0x20D0 && rune <= 0x20FF) ||
+          (rune >= 0xFE20 && rune <= 0xFE2F)) {
         return true;
       }
     }

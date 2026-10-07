@@ -99,8 +99,8 @@ void main() async {
   // (视频弹幕与直播弹幕共用同一渲染库,设置一次即可覆盖两者)。
   // 主字体必须显式指定:否则回退链首项会被当成主字体,整体字形被接管。
   if (Platform.isIOS || Platform.isMacOS) {
-    DmUtils.fontFamily = 'CupertinoSystemText';
-    DmUtils.fontFamilyFallback = const ['BabelStone Han'];
+    DmUtils.fontFamily = ThemeUtils.appleSystemFont;
+    DmUtils.fontFamilyFallback = ThemeUtils.appleFontFallback;
   }
   await _initAppPath();
   try {
