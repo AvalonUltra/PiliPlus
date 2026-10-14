@@ -92,10 +92,21 @@ class AndroidHdrPlaybackBackend extends PlaybackBackend {
   );
 
   @override
-  Future<void> setPlaybackSpeed(double speed) => _invoke(
-    'setPlaybackSpeed',
-    {'speed': speed},
-  );
+  Future<void> setPlaybackSpeed(double speed) async {
+    if (_sessionId == null) return;
+    await _invoke('setPlaybackSpeed', {'speed': speed});
+    // 原生端不回报倍速,在此记录:控制器靠 state.rate 判断是否需要切换,
+    // 不记录的话它永远是 1.0,选 1 倍速会被当成“未变化”而直接跳过
+    _state = PlaybackStateSnapshot(
+      playing: _state.playing,
+      completed: _state.completed,
+      position: _state.position,
+      duration: _state.duration,
+      width: _state.width,
+      height: _state.height,
+      rate: speed,
+    );
+  }
 
   @override
   Future<void> setVolume(double volume) => _invoke(

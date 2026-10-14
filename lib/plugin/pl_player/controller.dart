@@ -1205,10 +1205,12 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   // 开始播放
   Future<void> _initializePlayer() async {
     if (_instance == null) return;
-    // 设置倍速
-    if (_videoPlayerController != null) {
+    // 设置倍速(原生后端每次重建都从 1 倍开始,同样需要恢复)
+    final rate =
+        _androidHdrBackend?.state.rate ?? _videoPlayerController?.state.rate;
+    if (rate != null) {
       final speed = isLive ? 1.0 : playbackSpeed;
-      if (_videoPlayerController!.state.rate != speed) {
+      if (rate != speed) {
         await setPlaybackSpeed(speed);
       }
     }
