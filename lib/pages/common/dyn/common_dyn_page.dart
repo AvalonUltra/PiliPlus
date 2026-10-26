@@ -14,6 +14,7 @@ import 'package:PiliPlus/models/common/enum_with_label.dart';
 import 'package:PiliPlus/pages/article/widgets/sliver_list.dart';
 import 'package:PiliPlus/pages/common/dyn/common_dyn_controller.dart';
 import 'package:PiliPlus/pages/common/fab_mixin.dart';
+import 'package:PiliPlus/pages/common/reply_fold_entry.dart';
 import 'package:PiliPlus/pages/video/reply/vote/reply_vote_item.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/reply_item_grpc.dart';
 import 'package:PiliPlus/pages/video/reply_reply/view.dart';
@@ -182,21 +183,26 @@ mixin CommonDynPageMixin<T extends StatefulWidget>
                   ),
                 );
               } else {
-                return ReplyItemGrpc(
-                  replyItem: response[index],
-                  replyLevel: 1,
-                  replyReply: (item, id) => replyReply(context, item, id),
-                  onReply: controller.onReply,
-                  onDelete: (item, subIndex) =>
-                      controller.onRemove(index, item, subIndex),
-                  upMid: controller.upMid,
-                  onViewImage: hideFab,
-                  onCheckReply: controller.onCheckReply,
-                  onToggleTop: (item) => controller.onToggleTop(
-                    item,
-                    index,
-                    controller.oid,
-                    controller.replyType,
+                return withReplyFold(
+                  controller,
+                  index,
+                  response.length,
+                  ReplyItemGrpc(
+                    replyItem: response[index],
+                    replyLevel: 1,
+                    replyReply: (item, id) => replyReply(context, item, id),
+                    onReply: controller.onReply,
+                    onDelete: (item, subIndex) =>
+                        controller.onRemove(index, item, subIndex),
+                    upMid: controller.upMid,
+                    onViewImage: hideFab,
+                    onCheckReply: controller.onCheckReply,
+                    onToggleTop: (item) => controller.onToggleTop(
+                      item,
+                      index,
+                      controller.oid,
+                      controller.replyType,
+                    ),
                   ),
                 );
               }

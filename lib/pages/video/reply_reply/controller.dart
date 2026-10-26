@@ -121,6 +121,11 @@ class VideoReplyReplyController extends ReplyController
     });
   }
 
+  // 对话视图不是完整的楼中楼,没有折叠卡片
+  @override
+  (int, int, int?)? get foldTarget =>
+      dialog == null ? (oid, replyType, rpid) : null;
+
   @override
   Future<LoadingState> customGetData() => dialog != null
       ? ReplyGrpc.dialogList(

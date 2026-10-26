@@ -10,6 +10,7 @@ import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show ReplyInfo;
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/pages/common/fab_mixin.dart';
+import 'package:PiliPlus/pages/common/reply_fold_entry.dart';
 import 'package:PiliPlus/pages/video/reply/controller.dart';
 import 'package:PiliPlus/pages/video/reply/vote/reply_vote_item.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/reply_item_grpc.dart';
@@ -187,21 +188,26 @@ class _VideoReplyPanelState extends State<VideoReplyPanel>
                   ),
                 );
               } else {
-                return ReplyItemGrpc(
-                  replyItem: response[index],
-                  replyLevel: widget.replyLevel,
-                  replyReply: replyReply,
-                  onReply: _videoReplyController.onReply,
-                  onDelete: (item, subIndex) =>
-                      _videoReplyController.onRemove(index, item, subIndex),
-                  upMid: _videoReplyController.upMid,
-                  getTag: () => heroTag,
-                  onCheckReply: _videoReplyController.onCheckReply,
-                  onToggleTop: (item) => _videoReplyController.onToggleTop(
-                    item,
-                    index,
-                    _videoReplyController.aid,
-                    _videoReplyController.videoType.replyType,
+                return withReplyFold(
+                  _videoReplyController,
+                  index,
+                  response.length,
+                  ReplyItemGrpc(
+                    replyItem: response[index],
+                    replyLevel: widget.replyLevel,
+                    replyReply: replyReply,
+                    onReply: _videoReplyController.onReply,
+                    onDelete: (item, subIndex) =>
+                        _videoReplyController.onRemove(index, item, subIndex),
+                    upMid: _videoReplyController.upMid,
+                    getTag: () => heroTag,
+                    onCheckReply: _videoReplyController.onCheckReply,
+                    onToggleTop: (item) => _videoReplyController.onToggleTop(
+                      item,
+                      index,
+                      _videoReplyController.aid,
+                      _videoReplyController.videoType.replyType,
+                    ),
                   ),
                 );
               }

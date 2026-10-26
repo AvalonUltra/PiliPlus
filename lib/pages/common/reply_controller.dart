@@ -1,7 +1,10 @@
 import 'package:PiliPlus/common/widgets/flutter/text_field/controller.dart';
+import 'package:PiliPlus/grpc/bilibili/main/community/reply/fold.pb.dart'
+    show FoldMixedCard;
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show MainListReply, ReplyInfo, SubjectControl, Mode;
 import 'package:PiliPlus/grpc/bilibili/pagination.pb.dart';
+import 'package:PiliPlus/grpc/reply_fold.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/reply.dart';
 import 'package:PiliPlus/models/common/reply/reply_sort_type.dart';
@@ -85,6 +88,88 @@ abstract class ReplyController<R> extends CommonListController<R, ReplyInfo> {
     subjectControl = null;
     paginationReply = null;
     return super.onRefresh();
+  }
+
+  // ---- 折叠评论(官方 App 的「展开更多评论」),见 ReplyFoldGrpc ----
+
+  /// 请求折叠评论所需的 (oid, type, 楼中楼的 root);null 表示该列表不支持。
+  (int, int, int?)? get foldTarget => null;
+
+  FoldMixedCard? _foldCard;
+  int _foldGen = 0;
+  int? _foldExpandedAnchor;
+
+  /// 0 无折叠评论 · 1 可展开 · 2 展开中 · 3 已展开
+  final RxInt foldStatus = 0.obs;
+  int foldCount = 0;
+  String get foldText {
+    final text = _foldCard?.fold.bottomText ?? '';
+    return text.isEmpty ? '展开更多评论' : text;
+  }
+
+  @override
+  Future<void> queryData([bool isRefresh = true]) async {
+    final refreshing = isRefresh && !isLoading;
+    if (refreshing) _resetFold();
+    await super.queryData(isRefresh);
+    if (refreshing && loadingState.value is Success) _loadFoldCard();
+  }
+
+  void _resetFold() {
+    _foldGen++;
+    _foldCard = null;
+    _foldExpandedAnchor = null;
+    foldCount = 0;
+    foldStatus.value = 0;
+  }
+
+  Future<void> _loadFoldCard() async {
+    final target = foldTarget;
+    if (target == null) return;
+    final gen = _foldGen;
+    final (oid, type, root) = target;
+    final card = root == null
+        ? await ReplyFoldGrpc.mainCard(oid: oid, type: type)
+        : await ReplyFoldGrpc.detailCard(oid: oid, type: type, root: root);
+    if (card == null || gen != _foldGen) return;
+    _foldCard = card;
+    foldStatus.value = 1;
+    loadingState.refresh();
+  }
+
+  /// 折叠入口跟在哪条评论下面(列表下标);-1 表示不显示。
+  int foldAnchor(int length) {
+    if (foldStatus.value == 0 || length == 0) return -1;
+    if (_foldExpandedAnchor case final anchor?) return anchor;
+    final rank = _foldCard!.displayRank.toInt() + (hasUpTop ? 1 : 0);
+    return (rank - 1).clamp(0, length - 1);
+  }
+
+  Future<void> expandFold() async {
+    final card = _foldCard;
+    final target = foldTarget;
+    if (card == null || target == null || foldStatus.value != 1) return;
+    final list = loadingState.value.dataOrNull;
+    if (list == null) return;
+    final gen = _foldGen;
+    foldStatus.value = 2;
+    final replies = await ReplyFoldGrpc.expand(
+      oid: target.$1,
+      type: target.$2,
+      card: card,
+    );
+    if (gen != _foldGen) return;
+    if (replies == null) {
+      foldStatus.value = 1;
+      SmartDialog.showToast('折叠评论加载失败');
+      return;
+    }
+    final anchor = foldAnchor(list.length);
+    _foldExpandedAnchor = anchor;
+    list.insertAll(anchor + 1, replies);
+    foldCount = replies.length;
+    foldStatus.value = 3;
+    loadingState.refresh();
   }
 
   // 排序搜索评论

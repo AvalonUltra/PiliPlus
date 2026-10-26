@@ -45,6 +45,10 @@ class VideoReplyController extends ReplyController<MainListReply>
   }
 
   @override
+  (int, int, int?)? get foldTarget =>
+      (isPugv ? videoCtr.epId! : aid, videoType.replyType, null);
+
+  @override
   Future<LoadingState<MainListReply>> customGetData() => ReplyGrpc.mainList(
     oid: isPugv ? videoCtr.epId! : aid,
     type: videoType.replyType,

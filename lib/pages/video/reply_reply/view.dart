@@ -12,6 +12,7 @@ import 'package:PiliPlus/common/widgets/view_safe_area.dart';
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show ReplyInfo;
 import 'package:PiliPlus/http/loading_state.dart';
+import 'package:PiliPlus/pages/common/reply_fold_entry.dart';
 import 'package:PiliPlus/pages/common/slide/common_slide_page.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/reply_item_grpc.dart';
 import 'package:PiliPlus/pages/video/reply_reply/controller.dart';
@@ -311,7 +312,12 @@ class _VideoReplyReplyPanelState extends State<VideoReplyReplyPanel>
               ),
             );
           }
-          final child = _replyItem(context, response[index], index);
+          final child = withReplyFold(
+            _controller,
+            index,
+            response.length,
+            _replyItem(context, response[index], index),
+          );
           if (jumpIndex == index) {
             return ColoredBoxTransition(
               color: _colorAnimation ??= _controller.animController.drive(
