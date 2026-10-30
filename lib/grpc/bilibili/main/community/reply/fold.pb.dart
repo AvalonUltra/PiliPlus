@@ -5,6 +5,7 @@
 
 // ignore_for_file: annotate_overrides, non_constant_identifier_names
 
+import 'dart:convert' show base64, base64Decode;
 import 'dart:core' as $core;
 
 import 'package:fixnum/fixnum.dart' as $fixnum;
@@ -112,6 +113,41 @@ class FoldMixedCard extends $pb.GeneratedMessage {
 
   $core.bool get isFold =>
       type == typeFold && hasFold() && fold.hasFoldPagination();
+
+  /// 分页令牌里编码的被折叠评论 rpid(令牌格式未公开:{3: {1: packed rpids}}),
+  /// 解析失败时返回空集。
+  $core.Set<$fixnum.Int64> get foldedRpids {
+    try {
+      final token = base64Decode(
+        base64.normalize(fold.foldPagination.offset),
+      );
+      final outer = $pb.CodedBufferReader(token);
+      while (!outer.isAtEnd()) {
+        final tag = outer.readTag();
+        if (tag >> 3 != 3 || tag & 7 != 2) {
+          outer.skipField(tag);
+          continue;
+        }
+        final rpids = <$fixnum.Int64>{};
+        final inner = $pb.CodedBufferReader(outer.readBytes());
+        while (!inner.isAtEnd()) {
+          final t = inner.readTag();
+          if (t >> 3 == 1 && t & 7 == 2) {
+            final packed = $pb.CodedBufferReader(inner.readBytes());
+            while (!packed.isAtEnd()) {
+              rpids.add(packed.readInt64());
+            }
+          } else if (t >> 3 == 1 && t & 7 == 0) {
+            rpids.add(inner.readInt64());
+          } else {
+            inner.skipField(t);
+          }
+        }
+        return rpids;
+      }
+    } catch (_) {}
+    return const {};
+  }
 }
 
 class FoldListReq extends $pb.GeneratedMessage {

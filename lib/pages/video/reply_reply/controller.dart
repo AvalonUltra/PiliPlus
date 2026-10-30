@@ -1,3 +1,4 @@
+import 'package:PiliPlus/grpc/bilibili/main/community/reply/fold.pb.dart';
 import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show ReplyInfo, DetailListReply, Mode;
 import 'package:PiliPlus/grpc/reply.dart';
@@ -8,6 +9,7 @@ import 'package:PiliPlus/pages/common/reply_controller.dart';
 import 'package:PiliPlus/pages/video/reply_new/view.dart';
 import 'package:PiliPlus/utils/id_utils.dart';
 import 'package:PiliPlus/utils/storage_pref.dart';
+import 'package:collection/collection.dart';
 import 'package:extended_nested_scroll_view/extended_nested_scroll_view.dart';
 import 'package:fixnum/fixnum.dart';
 import 'package:flutter/scheduler.dart';
@@ -84,6 +86,13 @@ class VideoReplyReplyController extends ReplyController
         setIndexById(Int64(id!), data.root.replies);
         id = null;
       }
+      // 楼中楼的折叠卡片随当前排序的响应下发(按热度时没有)
+      offerFoldCard(
+        mixedCardsOf(
+          data,
+          detailListMixedCardsTag,
+        ).firstWhereOrNull((e) => e.isFold),
+      );
     }
 
     return false;
@@ -123,8 +132,10 @@ class VideoReplyReplyController extends ReplyController
 
   // 对话视图不是完整的楼中楼,没有折叠卡片
   @override
-  (int, int, int?)? get foldTarget =>
-      dialog == null ? (oid, replyType, rpid) : null;
+  (int, int)? get foldTarget => dialog == null ? (oid, replyType) : null;
+
+  @override
+  bool get foldCardFromResponse => true;
 
   @override
   Future<LoadingState> customGetData() => dialog != null

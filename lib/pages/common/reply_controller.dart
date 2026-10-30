@@ -92,12 +92,22 @@ abstract class ReplyController<R> extends CommonListController<R, ReplyInfo> {
 
   // ---- 折叠评论(官方 App 的「展开更多评论」),见 ReplyFoldGrpc ----
 
-  /// 请求折叠评论所需的 (oid, type, 楼中楼的 root);null 表示该列表不支持。
-  (int, int, int?)? get foldTarget => null;
+  /// 请求折叠评论所需的 (oid, type);null 表示该列表不支持。
+  (int, int)? get foldTarget => null;
+
+  /// 卡片随列表响应下发(楼中楼),无需另行请求。
+  bool get foldCardFromResponse => false;
 
   FoldMixedCard? _foldCard;
   int _foldGen = 0;
   int? _foldExpandedAnchor;
+
+  /// 卡片令牌里的 rpid;都已出现在列表里(如按时间排序时服务端不折叠)
+  /// 就不显示入口。
+  Set<Int64> _foldRpids = const {};
+  final Set<Int64> _foldExpandedIds = {};
+  int _foldPresenceLength = -1;
+  bool _foldAllPresent = false;
 
   /// 0 无折叠评论 · 1 可展开 · 2 展开中 · 3 已展开
   final RxInt foldStatus = 0.obs;
@@ -112,35 +122,72 @@ abstract class ReplyController<R> extends CommonListController<R, ReplyInfo> {
     final refreshing = isRefresh && !isLoading;
     if (refreshing) _resetFold();
     await super.queryData(isRefresh);
-    if (refreshing && loadingState.value is Success) _loadFoldCard();
+    if (refreshing && !foldCardFromResponse && loadingState.value is Success) {
+      _loadFoldCard();
+    }
+  }
+
+  @override
+  void handleListResponse(List<ReplyInfo> dataList) {
+    super.handleListResponse(dataList);
+    // 已展开的折叠评论若在后续分页里再次出现,不重复显示
+    if (_foldExpandedIds.isNotEmpty) {
+      dataList.removeWhere((e) => _foldExpandedIds.contains(e.id));
+    }
   }
 
   void _resetFold() {
     _foldGen++;
     _foldCard = null;
     _foldExpandedAnchor = null;
+    _foldRpids = const {};
+    _foldExpandedIds.clear();
+    _foldPresenceLength = -1;
     foldCount = 0;
     foldStatus.value = 0;
+  }
+
+  /// 列表响应里带的折叠卡片(楼中楼)。
+  void offerFoldCard(FoldMixedCard? card) {
+    if (card == null || foldStatus.value != 0 || foldTarget == null) return;
+    _foldCard = card;
+    _foldRpids = card.foldedRpids;
+    _foldPresenceLength = -1;
+    foldStatus.value = 1;
   }
 
   Future<void> _loadFoldCard() async {
     final target = foldTarget;
     if (target == null) return;
     final gen = _foldGen;
-    final (oid, type, root) = target;
-    final card = root == null
-        ? await ReplyFoldGrpc.mainCard(oid: oid, type: type)
-        : await ReplyFoldGrpc.detailCard(oid: oid, type: type, root: root);
-    if (card == null || gen != _foldGen) return;
-    _foldCard = card;
-    foldStatus.value = 1;
-    loadingState.refresh();
+    final card = await ReplyFoldGrpc.mainCard(
+      oid: target.$1,
+      type: target.$2,
+      mode: mode,
+    );
+    if (gen != _foldGen) return;
+    offerFoldCard(card);
+    if (foldStatus.value == 1) loadingState.refresh();
+  }
+
+  bool _allFoldedPresent(List<ReplyInfo>? list) {
+    if (_foldRpids.isEmpty || list == null) return false;
+    if (list.length != _foldPresenceLength) {
+      _foldPresenceLength = list.length;
+      final ids = {for (final e in list) e.id};
+      _foldAllPresent = _foldRpids.every(ids.contains);
+    }
+    return _foldAllPresent;
   }
 
   /// 折叠入口跟在哪条评论下面(列表下标);-1 表示不显示。
   int foldAnchor(int length) {
-    if (foldStatus.value == 0 || length == 0) return -1;
+    final status = foldStatus.value;
+    if (status == 0 || length == 0) return -1;
     if (_foldExpandedAnchor case final anchor?) return anchor;
+    if (status == 1 && _allFoldedPresent(loadingState.value.dataOrNull)) {
+      return -1;
+    }
     final rank = _foldCard!.displayRank.toInt() + (hasUpTop ? 1 : 0);
     return (rank - 1).clamp(0, length - 1);
   }
@@ -164,8 +211,17 @@ abstract class ReplyController<R> extends CommonListController<R, ReplyInfo> {
       SmartDialog.showToast('折叠评论加载失败');
       return;
     }
+    // 列表里已有的(服务端在该排序下没有折叠它们)不再重复插入
+    final existing = {for (final e in list) e.id};
+    replies.removeWhere((e) => existing.contains(e.id));
+    if (replies.isEmpty) {
+      foldStatus.value = 0;
+      loadingState.refresh();
+      return;
+    }
     final anchor = foldAnchor(list.length);
     _foldExpandedAnchor = anchor;
+    _foldExpandedIds.addAll(replies.map((e) => e.id));
     list.insertAll(anchor + 1, replies);
     foldCount = replies.length;
     foldStatus.value = 3;

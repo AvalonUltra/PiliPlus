@@ -14,6 +14,7 @@ import 'package:PiliPlus/grpc/reply.dart';
 import 'package:PiliPlus/grpc/url.dart';
 import 'package:PiliPlus/http/constants.dart';
 import 'package:PiliPlus/http/init.dart';
+import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/utils/accounts/account.dart';
 import 'package:PiliPlus/utils/login_utils.dart';
 import 'package:collection/collection.dart';
@@ -23,10 +24,10 @@ import 'package:protobuf/protobuf.dart' show GeneratedMessage;
 
 /// 折叠评论(官方 App 里的「展开更多评论」)。
 ///
-/// 服务端只向 7.80 及以上版本的手机客户端下发折叠卡片(MixedCard.fold),
-/// 卡片里的分页令牌编码了被折叠评论的 rpid,FoldList 只认这个令牌。
-/// PiliPlus 平时以 HD 客户端身份请求,收不到卡片,所以这里另以新版手机
-/// 客户端身份、不带任何账号信息匿名请求一次,只用来取卡片和折叠列表。
+/// 卡片(MixedCard.fold)里的分页令牌编码了被折叠评论的 rpid,FoldList 只认
+/// 这个令牌。主评论列表的卡片服务端只下发给 7.80 及以上版本的手机客户端,
+/// PiliPlus 平时以 HD 客户端身份请求收不到,所以另以新版手机客户端身份、
+/// 不带任何账号信息匿名请求一次主列表首页,只用来取卡片。
 abstract final class ReplyFoldGrpc {
   static const _build = 8600300;
   static const _versionName = '8.60.0';
@@ -113,10 +114,13 @@ abstract final class ReplyFoldGrpc {
     }
   }
 
-  /// 主评论列表的折叠卡片(没有被折叠的评论时为 null)。
+  /// 主评论列表的折叠卡片(没有被折叠的评论时为 null)。HD 身份的主列表
+  /// 不带卡片,只能另以手机客户端身份匿名取;楼中楼的卡片 HD 身份也有,
+  /// 直接从正常的 DetailList 响应里读。
   static Future<FoldMixedCard?> mainCard({
     required int oid,
     required int type,
+    required Mode mode,
   }) async {
     final res = await _call(
       GrpcUrl.mainList,
@@ -124,7 +128,7 @@ abstract final class ReplyFoldGrpc {
         oid: Int64(oid),
         type: Int64(type),
         rpid: Int64.ZERO,
-        cursor: CursorReq(mode: Mode.MAIN_LIST_HOT),
+        cursor: CursorReq(mode: mode),
       ),
       MainListReply.fromBuffer,
     );
@@ -135,28 +139,15 @@ abstract final class ReplyFoldGrpc {
     ).firstWhereOrNull((e) => e.isFold);
   }
 
-  /// 楼中楼的折叠卡片。
-  static Future<FoldMixedCard?> detailCard({
-    required int oid,
-    required int type,
-    required int root,
-  }) async {
-    final res = await _call(
-      GrpcUrl.detailList,
-      DetailListReq(
-        oid: Int64(oid),
-        type: Int64(type),
-        root: Int64(root),
-        rpid: Int64.ZERO,
-        scene: DetailListScene.REPLY,
-      ),
-      DetailListReply.fromBuffer,
+  /// FoldList 走账号的正常请求(登录后才有 IP 属地、点赞状态),失败再匿名兜底。
+  static Future<FoldListResp?> _foldPage(FoldListReq request) async {
+    final res = await GrpcReq.request(
+      _foldList,
+      request,
+      FoldListResp.fromBuffer,
     );
-    if (res == null) return null;
-    return mixedCardsOf(
-      res,
-      detailListMixedCardsTag,
-    ).firstWhereOrNull((e) => e.isFold);
+    if (res case Success(:final response)) return response;
+    return _call(_foldList, request, FoldListResp.fromBuffer);
   }
 
   /// 展开卡片对应的全部折叠评论(已按用户的屏蔽规则过滤)。
@@ -168,14 +159,12 @@ abstract final class ReplyFoldGrpc {
     final replies = <ReplyInfo>[];
     var pagination = card.fold.foldPagination;
     for (var i = 0; i < _maxPages; i++) {
-      final res = await _call(
-        _foldList,
+      final res = await _foldPage(
         FoldListReq(
           oid: Int64(oid),
           type: Int64(type),
           pagination: pagination,
         ),
-        FoldListResp.fromBuffer,
       );
       if (res == null) return replies.isEmpty ? null : replies;
       replies.addAll(res.replies);
