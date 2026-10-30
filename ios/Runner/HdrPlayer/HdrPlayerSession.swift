@@ -13,8 +13,11 @@ final class HdrPlayerSession: NSObject {
     private let sessionId: Int
     private let sendEvent: (Int, String, [String: Any]) -> Void
 
-    let view = HdrPlayerContainerView()
     private let player = AVPlayer()
+    private var videoGravity: AVLayerVideoGravity = .resizeAspect
+    /// Every Flutter platform view showing this session gets its own layer
+    /// on the shared AVPlayer (see makeView()).
+    private let attachedViews = NSHashTable<HdrPlayerContainerView>.weakObjects()
     private var item: AVPlayerItem?
     private var bridge: DashHlsBridge?
     private var videoOutput: AVPlayerItemVideoOutput?
@@ -43,8 +46,6 @@ final class HdrPlayerSession: NSObject {
         self.sessionId = sessionId
         self.sendEvent = sendEvent
         super.init()
-        view.backgroundColor = .clear
-        view.playerLayer.player = player
         player.actionAtItemEnd = .pause
     }
 
@@ -64,6 +65,26 @@ final class HdrPlayerSession: NSObject {
             // states, only silent-switch/background behaviour degrades.
             NSLog("[HdrPlayer] audio session setup failed: \(error)")
         }
+    }
+
+    /// A fresh view for one Flutter platform view, with its own AVPlayerLayer
+    /// on the shared AVPlayer (multiple layers per player are supported).
+    ///
+    /// Handing every platform view the same UIView breaks across page
+    /// transitions: all video pages share one player controller, so while
+    /// the outgoing page is popped it still rebuilds against the session the
+    /// returning page just opened, re-parents the single view into its own
+    /// platform view, and takes it along when it is disposed — the returning
+    /// page is left black with audio still playing.
+    func makeView() -> HdrPlayerContainerView {
+        let view = HdrPlayerContainerView()
+        view.backgroundColor = .clear
+        view.playerLayer.videoGravity = videoGravity
+        if !disposed {
+            view.playerLayer.player = player
+        }
+        attachedViews.add(view)
+        return view
     }
 
     // MARK: - Public control surface
@@ -194,13 +215,16 @@ final class HdrPlayerSession: NSObject {
     func setFitMode(_ fitMode: String) {
         switch fitMode {
         case "fill":
-            view.playerLayer.videoGravity = .resize
+            videoGravity = .resize
         case "cover":
-            view.playerLayer.videoGravity = .resizeAspectFill
+            videoGravity = .resizeAspectFill
         default:
             // contain / fitWidth / fitHeight: the Flutter side already sizes
             // the platform view, aspect fit matches Android's behaviour.
-            view.playerLayer.videoGravity = .resizeAspect
+            videoGravity = .resizeAspect
+        }
+        for view in attachedViews.allObjects {
+            view.playerLayer.videoGravity = videoGravity
         }
     }
 
@@ -242,7 +266,9 @@ final class HdrPlayerSession: NSObject {
         notificationTokens.removeAll()
         player.pause()
         player.replaceCurrentItem(with: nil)
-        view.playerLayer.player = nil
+        for view in attachedViews.allObjects {
+            view.playerLayer.player = nil
+        }
         bridge = nil
     }
 

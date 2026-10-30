@@ -211,7 +211,7 @@ final class HdrPlayerViewFactory: NSObject, FlutterPlatformViewFactory {
         arguments args: Any?
     ) -> FlutterPlatformView {
         let sessionId = (args as? [String: Any])?["sessionId"] as? Int
-        let view = sessionId.flatMap { plugin?.sessions[$0]?.view } ?? UIView()
+        let view = sessionId.flatMap { plugin?.sessions[$0]?.makeView() } ?? UIView()
         return HdrPlatformView(view: view)
     }
 
@@ -226,6 +226,12 @@ final class HdrPlatformView: NSObject, FlutterPlatformView {
     init(view: UIView) {
         contentView = view
         super.init()
+    }
+
+    deinit {
+        // Released by the engine when the platform view is disposed: drop this
+        // view's layer from the player so only live pages keep rendering.
+        (contentView as? HdrPlayerContainerView)?.playerLayer.player = nil
     }
 
     func view() -> UIView { contentView }

@@ -1010,6 +1010,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       width: width,
       height: height,
     );
+    // 视图在 open 之前就已按新后端重建过,那时还没有 sessionId,只能显示
+    // 占位色块;拿到 sessionId 后再重建一次,否则画面可能一直是黑的
+    if (identical(_androidHdrBackend, backend)) {
+      videoViewVersion.value++;
+    }
   }
 
   Future<void> switchToMediaKitBackend({String? reason}) async {
