@@ -12,7 +12,7 @@ import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/account_type.dart';
 import 'package:PiliPlus/models/common/audio_normalization.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models/common/video/video_type.dart';
 import 'package:PiliPlus/models/user/danmaku_rule.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
@@ -37,11 +37,12 @@ import 'package:PiliPlus/utils/accounts.dart';
 import 'package:PiliPlus/utils/android/android_helper.dart';
 import 'package:PiliPlus/utils/android/bindings.g.dart';
 import 'package:PiliPlus/utils/asset_utils.dart';
+import 'package:PiliPlus/utils/desktop/window_controller.dart';
 import 'package:PiliPlus/utils/device_utils.dart';
 import 'package:PiliPlus/utils/duration_utils.dart';
 import 'package:PiliPlus/utils/extension/box_ext.dart';
+import 'package:PiliPlus/utils/extension/native_geometry_ext.dart';
 import 'package:PiliPlus/utils/extension/num_ext.dart';
-import 'package:PiliPlus/utils/extension/size_ext.dart';
 import 'package:PiliPlus/utils/feed_back.dart';
 import 'package:PiliPlus/utils/image_utils.dart';
 import 'package:PiliPlus/utils/ios/pip_helper.dart';
@@ -66,13 +67,14 @@ import 'package:material_ui/material_ui.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:media_kit_video/media_kit_video.dart';
 import 'package:native_device_orientation/native_device_orientation.dart';
+import 'package:nativeapi/nativeapi.dart' as nativeapi show Size, Rectangle;
 import 'package:path/path.dart' as path;
 import 'package:screen_brightness_platform_interface/screen_brightness_platform_interface.dart';
 import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:window_manager/window_manager.dart';
 
 typedef PlayCallback = Future<void>? Function();
-typedef PlayOwner = ({String tag, Type type});
+typedef PlayOwner = ({String tag, Type? type});
 
 class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   Player? _videoPlayerController;
@@ -93,7 +95,8 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   final RxInt position = RxInt(0);
   final RxInt seekPosition = RxInt(0);
-  int get progress => isSeeking.value ? seekPosition.value : position.value;
+  int get progress =>
+      isSeeking.value && hoverDx == null ? seekPosition.value : position.value;
 
   int get positionInMilliseconds =>
       _androidHdrBackend?.state.position.inMilliseconds ??
@@ -221,10 +224,14 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       (Platform.isAndroid && AndroidHelper.isPipMode) ||
       (PlatformUtils.isDesktop && isDesktopPip);
   late bool isDesktopPip = false;
-  late Rect _lastWindowBounds;
-  static Rect? _lastPipBounds;
+  late nativeapi.Rectangle _lastWindowBounds;
+  static nativeapi.Rectangle? _lastPipBounds;
 
-  Rect _adjustPipBounds(Rect lastRect, Size size, double aspectRatio) {
+  nativeapi.Rectangle _adjustPipBounds(
+    nativeapi.Rectangle lastRect,
+    nativeapi.Size size,
+    double aspectRatio,
+  ) {
     final lastSize = lastRect.size;
     final lastOrientation = lastSize.orientation;
     final orientation = size.orientation;
@@ -250,26 +257,24 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           }
       }
 
-      return _lastPipBounds = Rect.fromLTWH(
-        lastRect.left,
-        lastRect.top,
-        width,
-        height,
+      return _lastPipBounds = nativeapi.Rectangle(
+        x: lastRect.x,
+        y: lastRect.y,
+        width: width,
+        height: height,
       );
     }
-    return _lastPipBounds = Rect.fromLTWH(
-      lastRect.left,
-      lastRect.top,
-      lastSize.width,
-      lastSize.width / aspectRatio,
+    return _lastPipBounds = nativeapi.Rectangle(
+      x: lastRect.x,
+      y: lastRect.y,
+      width: lastSize.width,
+      height: lastSize.width / aspectRatio,
     );
   }
 
-  bool updatePipBounds() {
+  bool updatePipBounds(Window window) {
     if (isDesktopPip) {
-      windowManager.getBounds().then((rect) {
-        if (isDesktopPip) _lastPipBounds = rect;
-      });
+      _lastPipBounds = window.bounds;
       return true;
     }
     return false;
@@ -277,38 +282,43 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   late final showWindowTitleBar = Pref.showWindowTitleBar;
   late final RxBool isAlwaysOnTop = false.obs;
-  Future<void> setAlwaysOnTop(bool value) {
+  void setAlwaysOnTop(bool value, {Window? window}) {
+    window ??= WindowController.instance.window;
+    if (window == null) return;
+
     isAlwaysOnTop.value = value;
-    return windowManager.setAlwaysOnTop(value);
+    window.isAlwaysOnTop = value;
   }
 
-  Future<void> exitDesktopPip() {
+  void exitDesktopPip() {
+    final window = WindowController.instance.window;
+    if (window == null) return;
+
     isDesktopPip = false;
-    return Future.wait([
-      if (showWindowTitleBar)
-        windowManager.setTitleBarStyle(TitleBarStyle.normal),
-      windowManager.setMinimumSize(const Size(400, 700)),
-      windowManager.setBounds(_lastWindowBounds),
-      setAlwaysOnTop(false),
-      windowManager.setAspectRatio(0),
-    ]);
+    if (showWindowTitleBar) window.titleBarStyle = .normal;
+    window
+      ..minimumSize = DeviceUtils.desktopMinSize
+      ..bounds = _lastWindowBounds
+      ..aspectRatio = 0;
+    setAlwaysOnTop(false, window: window);
   }
 
-  Future<void> enterDesktopPip() async {
+  void enterDesktopPip() {
+    final window = WindowController.instance.window;
+    if (window == null) return;
+
     if (isFullScreen.value) return;
 
     isDesktopPip = true;
 
-    _lastWindowBounds = await windowManager.getBounds();
+    _lastWindowBounds = window.bounds;
 
-    if (showWindowTitleBar) {
-      windowManager.setTitleBarStyle(TitleBarStyle.hidden);
-    }
+    if (showWindowTitleBar) window.titleBarStyle = .hidden;
 
     const shortSide = 280.0;
     const minShortSide = 160.0;
-    final Size size;
-    final Size minimumSize;
+    final nativeapi.Size size;
+    final nativeapi.Size minimumSize;
     final state = _androidHdrBackend?.state;
     int width = state?.width ?? videoPlayerController?.state.width ?? 0;
     int height = state?.height ?? videoPlayerController?.state.height ?? 0;
@@ -316,23 +326,27 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     if (height == 0) height = this.height ?? 9;
     final aspectRatio = width / height;
     if (height > width) {
-      size = Size(shortSide, shortSide / aspectRatio);
-      minimumSize = Size(minShortSide, minShortSide / aspectRatio);
-    } else {
-      size = Size(shortSide * aspectRatio, shortSide);
-      minimumSize = Size(minShortSide * aspectRatio, minShortSide);
-    }
-
-    await windowManager.setMinimumSize(minimumSize);
-    setAlwaysOnTop(true);
-    if (_lastPipBounds != null) {
-      windowManager.setBounds(
-        _adjustPipBounds(_lastPipBounds!, size, aspectRatio),
+      size = nativeapi.Size(width: shortSide, height: shortSide / aspectRatio);
+      minimumSize = nativeapi.Size(
+        width: minShortSide,
+        height: minShortSide / aspectRatio,
       );
     } else {
-      windowManager.setSize(size);
+      size = nativeapi.Size(width: shortSide * aspectRatio, height: shortSide);
+      minimumSize = nativeapi.Size(
+        width: minShortSide * aspectRatio,
+        height: minShortSide,
+      );
     }
-    windowManager.setAspectRatio(width / height);
+
+    window.minimumSize = minimumSize;
+    setAlwaysOnTop(true, window: window);
+    if (_lastPipBounds != null) {
+      window.bounds = _adjustPipBounds(_lastPipBounds!, size, aspectRatio);
+    } else {
+      window.contentSize = size;
+    }
+    window.aspectRatio = aspectRatio;
   }
 
   void toggleDesktopPip() {
@@ -434,6 +448,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late double subtitleFontScale = Pref.subtitleFontScale;
   late double subtitleFontScaleFS = Pref.subtitleFontScaleFS;
   late int subtitlePaddingH = Pref.subtitlePaddingH;
+  int? tmpSubtitlePaddingB;
   late int subtitlePaddingB = Pref.subtitlePaddingB;
   late double subtitleBgOpacity = Pref.subtitleBgOpacity;
   final bool showVipDanmaku = Pref.showVipDanmaku; // loop unswitching
@@ -446,9 +461,11 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   late final darkVideoPage = Pref.darkVideoPage;
   late final enableSlideVolumeBrightness = Pref.enableSlideVolumeBrightness;
   late final enableSlideFS = Pref.enableSlideFS;
+  late final enableScrollVolume = Pref.enableScrollVolume;
   late final enableDragSubtitle = Pref.enableDragSubtitle;
+  late final fastForBackwardInSeconds = Pref.fastForBackwardDuration;
   late final fastForBackwardDuration = Duration(
-    seconds: Pref.fastForBackwardDuration,
+    seconds: fastForBackwardInSeconds,
   );
 
   late final horizontalSeasonPanel = Pref.horizontalSeasonPanel;
@@ -473,10 +490,12 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   late final bool tempPlayerConf = Pref.tempPlayerConf;
 
-  late int? cacheVideoQa = PlatformUtils.isMobile
+  late int? cacheVideoQa = PlatformUtils.isMobile || Platform.isLinux
       ? null
       : (Pref.defaultVideoQa == VideoQuality.autoCode
-            ? VideoQuality.high1080.code // 桌面端自动的真实兜底档
+            ? VideoQuality
+                  .high1080
+                  .code // 桌面端自动的真实兜底档
             : Pref.defaultVideoQa);
   late int cacheAudioQa = Pref.defaultAudioQa;
 
@@ -586,7 +605,9 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   }
 
   void onUpdatePadding(EdgeInsets padding) {
+    tmpSubtitlePaddingB = null;
     subtitlePaddingB = padding.bottom.round().clamp(0, 200);
+    updateSubtitleStyle();
     putSubtitleSettings();
   }
 
@@ -661,6 +682,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   void _onOrientationChanged(OrientationParams param) {
     _orientation = param.orientation;
     if (Platform.isIOS && !visible) return;
+    if (controlsLock.value) return;
     final orientation = param.orientation;
     final isFullScreen = this.isFullScreen.value;
     if (checkIsAutoRotate &&
@@ -673,7 +695,6 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
     switch (orientation) {
       case .portraitUp:
-        if (!_isVertical && controlsLock.value) return;
         if (!horizontalScreen && !_isVertical && isFullScreen) {
           if (!isManualFS) {
             triggerFullScreen(status: false, orientation: orientation);
@@ -683,7 +704,6 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         }
       case .portraitDown:
         if (!horizontalScreen) return;
-        if (!_isVertical && controlsLock.value) return;
         portraitDownMode();
       case .landscapeLeft:
         if (!horizontalScreen && !isFullScreen) {
@@ -773,6 +793,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     VoidCallback? onInit,
     Volume? volume,
     bool autoFullScreenFlag = false,
+    int? rotate,
   }) async {
     try {
       _processing = true;
@@ -807,7 +828,14 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       if (_playerCount == 0) {
         return;
       }
-      await _createPlaybackBackend(dataSource, seekTo, volume, duration);
+      // 配置Player 音轨、字幕等等
+      await _createPlaybackBackend(
+        dataSource,
+        seekTo,
+        volume,
+        duration,
+        rotate,
+      );
 
       if (_playerCount == 0) {
         _removeListeners();
@@ -959,10 +987,13 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     DataSource dataSource,
     Duration? seekTo,
     Volume? volume,
-    Duration? duration,
-  ) async {
+    Duration? duration, [
+    int? rotate,
+  ]) async {
     final wantsAbr = _wantsNativeAbr(dataSource);
-    if (wantsAbr || await _shouldUseAndroidHdrBackend()) {
+    // 画面旋转只有 mpv 支持
+    final needsMpv = rotate != null && rotate != 0;
+    if (!needsMpv && (wantsAbr || await _shouldUseAndroidHdrBackend())) {
       try {
         await _createAndroidHdrBackend(dataSource, seekTo, duration);
         return;
@@ -974,7 +1005,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         SmartDialog.showToast('已使用兼容播放');
       }
     }
-    await _createVideoController(dataSource, seekTo, volume);
+    await _createVideoController(dataSource, seekTo, volume, rotate);
   }
 
   Future<void> _createAndroidHdrBackend(
@@ -1024,7 +1055,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     final wasPlaying = playerStatus.isPlaying;
     final seekTo = Duration(seconds: position.value);
     await _disposeAndroidHdrBackend();
-    await _createVideoController(dataSource, seekTo, null);
+    await _createVideoController(dataSource, seekTo, null, null);
     await _initializePlayer();
     if (!wasPlaying) {
       await pause(notify: false);
@@ -1056,8 +1087,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       // 网络抖动/PCDN 短暂丢包时让 ffmpeg 透明重连并从断点续拉,
       // 大幅减少可见的“断流”(对所有在线视频生效)。真正失效的地址
       // (如 deadline 过期返回 403)ffmpeg 不会重试,仍由回源重拉兜底。
-      'stream-lavf-o':
-          'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
+      'stream-lavf-o': 'reconnect=1,reconnect_streamed=1,reconnect_on_network_error=1,reconnect_delay_max=5',
       if (Platform.isAndroid) 'ao': Pref.audioOutput,
       'volume':
           (PlatformUtils.isMobile ? Pref.playerVolume : volume.value * 100)
@@ -1106,6 +1136,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     DataSource dataSource,
     Duration? seekTo,
     Volume? volume,
+    int? rotate,
   ) async {
     isBuffering.value = false;
     _heartDuration = 0;
@@ -1136,6 +1167,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         ...liveBuffer
       else
         ...buffer,
+      'video-rotate': ?rotate?.toString(),
     };
 
     String video = dataSource.videoSource;
@@ -1382,30 +1414,28 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           EasyThrottle.throttle(
             'controllerStream.error.listen',
             const Duration(milliseconds: 10000),
-            () {
-              Timer(const Duration(milliseconds: 3000), () {
-                // if (kDebugMode) {
-                //   debugPrint("isBuffering.value: ${isBuffering.value}");
-                // }
-                // if (kDebugMode) {
-                //   debugPrint("_buffered.value: ${_buffered.value}");
-                // }
-                if (isBuffering.value && buffered.value == 0) {
-                  SmartDialog.showToast(
-                    '视频链接打开失败，重试中',
-                    displayTime: const Duration(milliseconds: 500),
-                  );
-                  // 优先回源重拉新地址:旧地址可能已过期(deadline)或被
-                  // PCDN 节点丢弃,原地重开必然再次失败。无回调时退回原地重开。
-                  final refetch = onRefetchUrl;
-                  if (refetch != null) {
-                    refetch();
-                  } else {
-                    refreshPlayer();
-                  }
+            () => Timer(const Duration(milliseconds: 3000), () {
+              // if (kDebugMode) {
+              //   debugPrint("isBuffering.value: ${isBuffering.value}");
+              // }
+              // if (kDebugMode) {
+              //   debugPrint("_buffered.value: ${_buffered.value}");
+              // }
+              if (isBuffering.value && buffered.value == 0) {
+                SmartDialog.showToast(
+                  '视频链接打开失败，重试中',
+                  displayTime: const Duration(milliseconds: 500),
+                );
+                // 优先回源重拉新地址:旧地址可能已过期(deadline)或被
+                // PCDN 节点丢弃,原地重开必然再次失败。无回调时退回原地重开。
+                final refetch = onRefetchUrl;
+                if (refetch != null) {
+                  refetch();
+                } else {
+                  refreshPlayer();
                 }
-              });
-            },
+              }
+            }),
           );
         } else if (event.startsWith('Could not open codec')) {
           SmartDialog.showToast('无法加载解码器, $event，可能会切换至软解');
@@ -1554,7 +1584,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
       }
       await _disposeAndroidHdrBackend();
       SmartDialog.showToast('已使用兼容播放');
-      await _createVideoController(dataSource, seekTo, null);
+      await _createVideoController(dataSource, seekTo, null, null);
       await _initializePlayer();
     });
   }
@@ -1725,7 +1755,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
   void hideTaskControls() {
     _timer?.cancel();
     _timer = Timer(showControlDuration, () {
-      if (!isSeeking.value && !tripling) {
+      if (!isSeeking.value && !tripling && hoverDx == null) {
         controls = false;
       }
       _timer = null;
@@ -1888,6 +1918,20 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     onForwardBackward(_currentPlaybackPosition - duration);
   }
 
+  void multiBackwardStart([_]) {
+    isSeeking.value = true;
+    seekPosition.value = max(0, seekPosition.value - fastForBackwardInSeconds);
+  }
+
+  void multiBackwardEnd() {
+    if (isSeeking.value) {
+      isSeeking.value = false;
+      onForwardBackward(Duration(seconds: seekPosition.value));
+    } else {
+      onBackward(fastForBackwardDuration);
+    }
+  }
+
   void onForwardBackward(Duration duration) {
     seekTo(
       duration.clamp(Duration.zero, Duration(seconds: this.duration.value)),
@@ -1990,7 +2034,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
             orientation: orientation,
           );
         } else {
-          await enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
+          enterDesktopFullScreen(inAppFullScreen: inAppFullScreen);
         }
       } else {
         if (PlatformUtils.isMobile) {
@@ -2002,7 +2046,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
           }
           await resetScreenRotation();
         } else {
-          await exitDesktopFullScreen();
+          exitDesktopFullScreen();
         }
       }
     } finally {
@@ -2159,7 +2203,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     // dataStatus.close();
 
     if (PlatformUtils.isDesktop && isAlwaysOnTop.value) {
-      windowManager.setAlwaysOnTop(false);
+      WindowController.instance.window?.isAlwaysOnTop = false;
     }
 
     _removeListeners();
@@ -2220,6 +2264,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
 
   late final Map<String, ui.Image?> previewCache = {};
   LoadingState<VideoShotData>? videoShot;
+  double? hoverDx;
   late final RxBool showPreview = false.obs;
   late final showSeekPreview = Pref.showSeekPreview;
   late final previewIndex = RxnInt();
@@ -2232,10 +2277,15 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
     if (videoShot case Success(:final response)) {
       showPreview.value = true;
-      previewIndex.value = max(
+      final index = max(
         0,
         (response.index.where((item) => item <= seconds).length - 2),
       );
+      if (previewIndex.value != index) {
+        previewIndex.value = index;
+      } else if (hoverDx != null) {
+        previewIndex.refresh();
+      }
     }
   }
 

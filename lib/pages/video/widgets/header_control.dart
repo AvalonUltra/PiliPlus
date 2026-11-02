@@ -17,10 +17,9 @@ import 'package:PiliPlus/http/live.dart';
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/http/video.dart';
 import 'package:PiliPlus/models/common/super_resolution_type.dart';
-import 'package:PiliPlus/models/common/video/audio_quality.dart';
+import 'package:PiliPlus/models/common/video/base_quality.dart';
 import 'package:PiliPlus/models/common/video/cdn_type.dart';
 import 'package:PiliPlus/models/common/video/video_decode_type.dart';
-import 'package:PiliPlus/models/common/video/video_quality.dart';
 import 'package:PiliPlus/models/video/play/url.dart';
 import 'package:PiliPlus/models_new/video/video_play_info/subtitle.dart';
 import 'package:PiliPlus/pages/common/common_intro_controller.dart';
@@ -541,33 +540,40 @@ class HeaderControlState extends State<HeaderControl>
                   child: Row(
                     spacing: 10,
                     children: [
+                      if (PlatformUtils.isDesktop) ...[
+                        ActionIconItem(
+                          tooltip: '向左旋转',
+                          onTap: () => videoDetailCtr.rotate = videoDetailCtr
+                              .calcRotate(-90),
+                          iconData: Icons.rotate_left,
+                        ),
+                        ActionIconItem(
+                          tooltip: '向右旋转',
+                          onTap: () => videoDetailCtr.rotate = videoDetailCtr
+                              .calcRotate(90),
+                          iconData: Icons.rotate_right,
+                        ),
+                      ],
                       Obx(
-                        () {
-                          final flipX = plPlayerController.flipX.value;
-                          return ActionRowLineItem(
-                            iconData: Icons.flip,
-                            onTap: () => plPlayerController.setFlipX(!flipX),
-                            text: " 左右翻转 ",
-                            selectStatus: flipX,
-                          );
-                        },
+                        () => ActionRowLineItem(
+                          text: " 左右翻转 ",
+                          iconData: Icons.flip,
+                          // 镜像只有 mpv 支持:经 setFlipX 切到兼容后端
+                          onTap: () => plPlayerController.setFlipX(
+                            !plPlayerController.flipX.value,
+                          ),
+                          selectStatus: plPlayerController.flipX.value,
+                        ),
                       ),
                       Obx(
-                        () {
-                          final flipY = plPlayerController.flipY.value;
-                          return ActionRowLineItem(
-                            icon: Icon(
-                              CustomIcons.flip_rotate_90,
-                              size: 13,
-                              color: flipY
-                                  ? theme.colorScheme.onSecondaryContainer
-                                  : theme.colorScheme.outline,
-                            ),
-                            onTap: () => plPlayerController.setFlipY(!flipY),
-                            text: " 上下翻转 ",
-                            selectStatus: flipY,
-                          );
-                        },
+                        () => ActionRowLineItem(
+                          text: " 上下翻转 ",
+                          iconData: CustomIcons.flip_rotate_90,
+                          onTap: () => plPlayerController.setFlipY(
+                            !plPlayerController.flipY.value,
+                          ),
+                          selectStatus: plPlayerController.flipY.value,
+                        ),
                       ),
                       if ((isFileSource &&
                               !(plPlayerController.dataSource as FileSource)
@@ -987,7 +993,8 @@ class HeaderControlState extends State<HeaderControl>
                   itemCount: videoFormat.length,
                   itemBuilder: (context, index) {
                     final item = videoFormat[index];
-                    final isCurr = !isAutoQa && currentVideoQa.code == item.quality;
+                    final isCurr =
+                        !isAutoQa && currentVideoQa.code == item.quality;
                     return ListTile(
                       dense: true,
                       onTap: () async {
@@ -1300,11 +1307,7 @@ class HeaderControlState extends State<HeaderControl>
                             '_',
                           );
                   // Reserved characters may not be used in file names. See: https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file#naming-conventions
-                  StorageUtils.saveBytes2File(
-                    name: name,
-                    bytes: bytes,
-                    allowedExtensions: [format.name],
-                  );
+                  StorageUtils.saveBytes2File(name: name, bytes: bytes);
                 } catch (e, s) {
                   Utils.reportError(e, s);
                   SmartDialog.showToast(e.toString());
@@ -2039,26 +2042,6 @@ class HeaderControlState extends State<HeaderControl>
                     ),
                   ),
                 ),
-                if (introController case final UgcIntroController ugc)
-                  SizedBox(
-                    width: btnWidth,
-                    height: btnHeight,
-                    child: Obx(
-                      () => ActionItem(
-                        expand: false,
-                        icon: const Icon(
-                          FontAwesomeIcons.thumbsDown,
-                          color: Colors.white,
-                        ),
-                        selectIcon: const Icon(
-                          FontAwesomeIcons.solidThumbsDown,
-                        ),
-                        onTap: () => ugc.handleAction(ugc.actionDislikeVideo),
-                        selectStatus: ugc.hasDislike.value,
-                        semanticsLabel: '点踩',
-                      ),
-                    ),
-                  ),
                 SizedBox(
                   width: btnWidth,
                   height: btnHeight,
@@ -2097,6 +2080,17 @@ class HeaderControlState extends State<HeaderControl>
                       selectStatus: introController.hasFav.value,
                       semanticsLabel: '收藏',
                     ),
+                  ),
+                ),
+                SizedBox(
+                  width: btnWidth,
+                  height: btnHeight,
+                  child: ActionItem(
+                    expand: false,
+                    icon: const Icon(CustomIcons.download, color: Colors.white),
+                    onTap: () => videoDetailCtr.onDownload(context),
+                    text: '缓存',
+                    semanticsLabel: '缓存',
                   ),
                 ),
                 SizedBox(
