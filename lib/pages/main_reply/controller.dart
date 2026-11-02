@@ -23,9 +23,6 @@ class MainReplyController extends ReplyController<MainListReply> {
   }
 
   @override
-  (int, int)? get foldTarget => (oid, replyType);
-
-  @override
   Future<LoadingState<MainListReply>> customGetData() => ReplyGrpc.mainList(
     type: replyType,
     oid: oid,

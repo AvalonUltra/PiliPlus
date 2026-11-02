@@ -10,7 +10,6 @@ import 'package:PiliPlus/grpc/bilibili/main/community/reply/v1.pb.dart'
     show ReplyInfo;
 import 'package:PiliPlus/http/loading_state.dart';
 import 'package:PiliPlus/pages/common/fab_mixin.dart';
-import 'package:PiliPlus/pages/common/reply_fold_entry.dart';
 import 'package:PiliPlus/pages/main_reply/controller.dart';
 import 'package:PiliPlus/pages/video/reply/widgets/reply_item_grpc.dart';
 import 'package:PiliPlus/pages/video/reply_reply/view.dart';
@@ -141,26 +140,21 @@ class _MainReplyPageState extends State<MainReplyPage>
                       ),
                     );
                   } else {
-                    return withReplyFold(
-                      _controller,
-                      index,
-                      response.length,
-                      ReplyItemGrpc(
-                        replyItem: response[index],
-                        replyLevel: 1,
-                        replyReply: (replyItem, id) =>
-                            replyReply(context, replyItem, id, colorScheme),
-                        onReply: _controller.onReply,
-                        onDelete: (item, subIndex) =>
-                            _controller.onRemove(index, item, subIndex),
-                        upMid: _controller.upMid,
-                        onCheckReply: _controller.onCheckReply,
-                        onToggleTop: (item) => _controller.onToggleTop(
-                          item,
-                          index,
-                          _controller.oid,
-                          _controller.replyType,
-                        ),
+                    return ReplyItemGrpc(
+                      replyItem: response[index],
+                      replyLevel: 1,
+                      replyReply: (replyItem, id) =>
+                          replyReply(context, replyItem, id, colorScheme),
+                      onReply: _controller.onReply,
+                      onDelete: (item, subIndex) =>
+                          _controller.onRemove(index, item, subIndex),
+                      upMid: _controller.upMid,
+                      onCheckReply: _controller.onCheckReply,
+                      onToggleTop: (item) => _controller.onToggleTop(
+                        item,
+                        index,
+                        _controller.oid,
+                        _controller.replyType,
                       ),
                     );
                   }
