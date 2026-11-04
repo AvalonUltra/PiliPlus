@@ -91,8 +91,9 @@ class WindowController {
         break;
       case WindowOcclusionChangedEvent():
         break;
-      // nativeapi 0.5.7 新增了事件类型(镜像源解析不到上游锁定的 0.5.3)
-      default:
+      case nativeapi.WindowDockedEvent():
+        break;
+      case nativeapi.WindowUndockedEvent():
         break;
     }
   }
