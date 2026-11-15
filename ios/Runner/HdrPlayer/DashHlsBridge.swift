@@ -55,6 +55,8 @@ final class DashHlsBridge: NSObject {
         var width: Int = 0
         var height: Int = 0
         var pathTag: String = "v"
+        /// ftyp+moov as served (sample entry patches applied), for TurboSource.
+        var initBytes: [UInt8] = []
     }
 
     /// One selectable video quality for the ABR master playlist.
@@ -87,6 +89,8 @@ final class DashHlsBridge: NSObject {
     }
 
     private var server: HdrLocalServer?
+    private var videoTracks: [Track] = []
+    private var audioTrack: Track?
     private(set) var videoCodec: String?
     private(set) var audioCodec: String?
 
@@ -191,6 +195,8 @@ final class DashHlsBridge: NSObject {
         // time and must stay attached to their own init segment, so don't renumber.
         loaded.sort { $0.0 < $1.0 }
         let tracks = loaded.map(\.1)
+        videoTracks = tracks
+        audioTrack = audio
         for t in tracks {
             playlists["video_\(t.pathTag).m3u8"] = mediaPlaylist(for: t, pathTag: t.pathTag)
         }
@@ -296,9 +302,10 @@ final class DashHlsBridge: NSObject {
         }
         if let sidxStart {
             let name = "init_\(tag).mp4"
-            try data.subdata(in: 0 ..< Int(sidxStart))
-                .write(to: playlistDir.appendingPathComponent(name))
+            let initData = data.subdata(in: 0 ..< Int(sidxStart))
+            try initData.write(to: playlistDir.appendingPathComponent(name))
             track.localInitName = name
+            track.initBytes = [UInt8](initData)
         }
         let moov = data.subdata(in: moovRange)
         let sample = Self.parseSampleEntry(moov: moov)
@@ -314,6 +321,32 @@ final class DashHlsBridge: NSObject {
         track.totalDuration = track.segments.reduce(0) { $0 + $1.duration }
         track.totalSize = track.segments.reduce(track.initLength) { $0 + $1.size }
         return track
+    }
+
+    /// The loaded DASH tracks, for fast-rate (> 2x) playback outside HLS.
+    func makeTurboSource() -> TurboSource? {
+        func convert(_ t: Track) -> TurboTrackSource? {
+            guard !t.initBytes.isEmpty, !t.segments.isEmpty else { return nil }
+            return TurboTrackSource(
+                tag: t.isVideo ? t.pathTag : "a",
+                url: t.url,
+                isLocal: t.isLocal,
+                initBytes: t.initBytes,
+                segments: t.segments.map {
+                    TurboTrackSource.Segment(offset: $0.offset, size: $0.size, duration: $0.duration)
+                },
+                width: t.width,
+                height: t.height
+            )
+        }
+        let videos = videoTracks.compactMap(convert)
+        guard !videos.isEmpty, videos.count == videoTracks.count else { return nil }
+        var audio: TurboTrackSource?
+        if let audioTrack {
+            guard let converted = convert(audioTrack) else { return nil }
+            audio = converted
+        }
+        return TurboSource(videos: videos, audio: audio, headers: headers)
     }
 
     private func fetchRange(url: String, upTo end: Int) async throws -> (Data, UInt64) {

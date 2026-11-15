@@ -22,6 +22,8 @@
 		C9F99A90D6E1A453EF37B823 /* HdrPlayerSession.swift in Sources */ = {isa = PBXBuildFile; fileRef = E63BF1CEB0D8BBA9F2843C21 /* HdrPlayerSession.swift */; };
 		E1D1A878D263C5462A2103AE /* DashHlsBridge.swift in Sources */ = {isa = PBXBuildFile; fileRef = 731B9C6711E5571C747D52AD /* DashHlsBridge.swift */; };
 		A1B2C3D4E5F60718293A4B5C /* AudioSessionGuard.swift in Sources */ = {isa = PBXBuildFile; fileRef = A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */; };
+		B2C3D4E5F60718293A4B5C6D /* TurboMp4.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C6E /* TurboMp4.swift */; };
+		B2C3D4E5F60718293A4B5C6F /* TurboSource.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2C3D4E5F60718293A4B5C70 /* TurboSource.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXCopyFilesBuildPhase section */
@@ -48,6 +50,8 @@
 		63F2789C7C1DF3CD2B80A936 /* Pods_Runner.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_Runner.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		731B9C6711E5571C747D52AD /* DashHlsBridge.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DashHlsBridge.swift; sourceTree = "<group>"; };
 		A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AudioSessionGuard.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C6E /* TurboMp4.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TurboMp4.swift; sourceTree = "<group>"; };
+		B2C3D4E5F60718293A4B5C70 /* TurboSource.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TurboSource.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
@@ -142,6 +146,8 @@
 				E63BF1CEB0D8BBA9F2843C21 /* HdrPlayerSession.swift */,
 				731B9C6711E5571C747D52AD /* DashHlsBridge.swift */,
 				A1B2C3D4E5F60718293A4B5D /* AudioSessionGuard.swift */,
+				B2C3D4E5F60718293A4B5C6E /* TurboMp4.swift */,
+				B2C3D4E5F60718293A4B5C70 /* TurboSource.swift */,
 				005196380AD94ED5779E9217 /* HdrLocalServer.swift */,
 			);
 			name = HdrPlayer;
@@ -340,6 +346,8 @@
 				C9F99A90D6E1A453EF37B823 /* HdrPlayerSession.swift in Sources */,
 				E1D1A878D263C5462A2103AE /* DashHlsBridge.swift in Sources */,
 				A1B2C3D4E5F60718293A4B5C /* AudioSessionGuard.swift in Sources */,
+				B2C3D4E5F60718293A4B5C6D /* TurboMp4.swift in Sources */,
+				B2C3D4E5F60718293A4B5C6F /* TurboSource.swift in Sources */,
 				5C09F16C3FEBDF5A1BCD2F3F /* HdrLocalServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

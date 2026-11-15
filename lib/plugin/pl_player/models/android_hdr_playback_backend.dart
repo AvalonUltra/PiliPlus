@@ -108,6 +108,16 @@ class AndroidHdrPlaybackBackend extends PlaybackBackend {
     );
   }
 
+  /// iOS:告知原生端接下来可能用到的最高倍速(长按倍速)。超过 2 倍时
+  /// AVPlayer 的 HLS 只能逐关键帧“快进”,原生端会提前准备普通 MP4 窗口,
+  /// 长按时无缝接力到可平滑播放高倍速的第二个播放器。
+  Future<void> setFastRateHint(double rate) async {
+    if (!Platform.isIOS) return;
+    try {
+      await _invoke('setFastRateHint', {'rate': rate});
+    } catch (_) {}
+  }
+
   @override
   Future<void> setVolume(double volume) => _invoke(
     'setVolume',

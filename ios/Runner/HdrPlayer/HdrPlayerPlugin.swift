@@ -112,6 +112,11 @@ final class HdrPlayerPlugin: NSObject, FlutterStreamHandler {
             session.setPlaybackSpeed((args?["speed"] as? NSNumber)?.floatValue ?? 1)
             result(nil)
 
+        case "setFastRateHint":
+            guard let session = requireSession(args, result) else { return }
+            session.setFastRateHint((args?["rate"] as? NSNumber)?.floatValue ?? 0)
+            result(nil)
+
         case "setVolume":
             guard let session = requireSession(args, result) else { return }
             session.setVolume((args?["volume"] as? NSNumber)?.floatValue ?? 1)
@@ -231,7 +236,7 @@ final class HdrPlatformView: NSObject, FlutterPlatformView {
     deinit {
         // Released by the engine when the platform view is disposed: drop this
         // view's layer from the player so only live pages keep rendering.
-        (contentView as? HdrPlayerContainerView)?.playerLayer.player = nil
+        (contentView as? HdrPlayerContainerView)?.detachAll()
     }
 
     func view() -> UIView { contentView }

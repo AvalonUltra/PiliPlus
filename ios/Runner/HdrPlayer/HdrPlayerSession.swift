@@ -2,29 +2,174 @@ import AVFoundation
 import Flutter
 import UIKit
 
+/// Hosts one AVPlayerLayer per playback engine of a session ("slot" 0 is the
+/// HLS player, 1/2 are fast-rate windows). Every layer stays in the render
+/// tree; the active engine's layer is simply raised above the others, so an
+/// incoming engine has already rendered its first frame when it is revealed.
 final class HdrPlayerContainerView: UIView {
-    override class var layerClass: AnyClass { AVPlayerLayer.self }
-    var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
+    private var slotLayers: [Int: AVPlayerLayer] = [:]
+    private var frontSlot = 0
+
+    var videoGravity: AVLayerVideoGravity = .resizeAspect {
+        didSet {
+            for layer in slotLayers.values { layer.videoGravity = videoGravity }
+        }
+    }
+
+    func setPlayer(_ player: AVPlayer?, slot: Int) {
+        if player == nil {
+            if let layer = slotLayers.removeValue(forKey: slot) {
+                layer.player = nil
+                layer.removeFromSuperlayer()
+            }
+            return
+        }
+        let layer = slotLayers[slot] ?? {
+            let created = AVPlayerLayer()
+            created.videoGravity = videoGravity
+            created.frame = bounds
+            self.layer.addSublayer(created)
+            slotLayers[slot] = created
+            return created
+        }()
+        layer.player = player
+        bringToFront(slot: frontSlot)
+    }
+
+    func bringToFront(slot: Int) {
+        frontSlot = slot
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for (s, layer) in slotLayers {
+            layer.zPosition = s == slot ? 1 : 0
+        }
+        CATransaction.commit()
+    }
+
+    func detachAll() {
+        for layer in slotLayers.values { layer.player = nil }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in slotLayers.values { layer.frame = bounds }
+        CATransaction.commit()
+    }
+}
+
+/// One AVPlayer with its item; `window` is set for fast-rate engines, whose
+/// item time is offset from the content time by `window.origin`.
+private final class PlaybackEngine {
+    let slot: Int
+    let player = AVPlayer()
+    let window: TurboWindow?
+    var videoOutput: AVPlayerItemVideoOutput?
+    var observations: [NSKeyValueObservation] = []
+    var notificationTokens: [NSObjectProtocol] = []
+    var dropped = false
+
+    init(slot: Int, window: TurboWindow?) {
+        self.slot = slot
+        self.window = window
+        player.actionAtItemEnd = .pause
+    }
+
+    var isMain: Bool { window == nil }
+    var origin: Double { window?.origin ?? 0 }
+    var item: AVPlayerItem? { player.currentItem }
+
+    func contentTime() -> Double {
+        guard let item else { return origin }
+        let seconds = item.currentTime().seconds
+        return (seconds.isFinite ? seconds : 0) + origin
+    }
+
+    func itemTime(_ content: Double) -> CMTime {
+        CMTime(seconds: max(0, content - origin), preferredTimescale: 90000)
+    }
+
+    func covers(_ content: Double, margin: Double) -> Bool {
+        window?.covers(content, margin: margin) ?? true
+    }
+
+    func tearDown() {
+        observations.forEach { $0.invalidate() }
+        observations.removeAll()
+        notificationTokens.forEach(NotificationCenter.default.removeObserver)
+        notificationTokens.removeAll()
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        window?.loader.invalidate()
+    }
+}
+
+/// A hand-over from the active engine to another one at a common content time.
+private final class EngineTransition {
+    let from: PlaybackEngine
+    let toMain: Bool
+    var target: PlaybackEngine?
+    var targetTime: Double = 0
+    var attempts = 0
+    var seekIssuedAt: CFTimeInterval = 0
+    var readyObservation: NSKeyValueObservation?
+    var boundaryToken: Any?
+    var deadline: DispatchWorkItem?
+
+    init(from: PlaybackEngine, toMain: Bool) {
+        self.from = from
+        self.toMain = toMain
+    }
 }
 
 /// One playback session backed by AVPlayer, mirroring the event protocol of
 /// the Android Media3 implementation in HdrPlayerPlugin.kt.
+///
+/// AVPlayer's HLS engine renders at most 2x: above that it switches to trick
+/// play and shows keyframes only. Rates above 2x therefore run on a second
+/// AVPlayer playing an ordinary MP4 window of the same DASH bytes
+/// (TurboSource). The HLS player keeps going at 2x until that window is
+/// ready, then the two meet at a common content time and swap seamlessly;
+/// dropping back to <= 2x hands over the same way.
 final class HdrPlayerSession: NSObject {
+    private static let hlsMaxRate: Float = 2.0
+    private static let windowSeconds = 120.0
+
     private let sessionId: Int
     private let sendEvent: (Int, String, [String: Any]) -> Void
 
-    private let player = AVPlayer()
-    private var videoGravity: AVLayerVideoGravity = .resizeAspect
-    /// Every Flutter platform view showing this session gets its own layer
-    /// on the shared AVPlayer (see makeView()).
-    private let attachedViews = NSHashTable<HdrPlayerContainerView>.weakObjects()
-    private var item: AVPlayerItem?
-    private var bridge: DashHlsBridge?
-    private var videoOutput: AVPlayerItemVideoOutput?
+    private let main = PlaybackEngine(slot: 0, window: nil)
+    private var player: AVPlayer { main.player }
+    private lazy var active: PlaybackEngine = main
+    /// Inactive fast-rate engine kept for the next hand-over.
+    private var spare: PlaybackEngine?
+    private var transition: EngineTransition?
+    private var turboSource: TurboSource?
+    private var turboBlockedUntil: CFTimeInterval = 0
+    private var unblockWork: DispatchWorkItem?
+    /// Highest rate Dart may ask for soon (long-press speed); above 2x the
+    /// next window is prepared ahead of time so a press engages quickly.
+    private var fastRateHint: Float = 0
+    /// The single in-flight window build (not tied to a transition, so a
+    /// cancelled hand-over still leaves a warm window behind).
+    private var windowTask: Task<Void, Never>?
+    /// A built window nobody has used yet.
+    private var warmWindow: TurboWindow?
+    private var lastWarmAttempt: CFTimeInterval = 0
+    /// Wall-clock lead (seconds) given to the incoming engine; adapted to how
+    /// long seek + preroll actually took.
+    private var leadToFast = 1.0
+    private var leadToMain = 0.8
+    /// Main became active but its layer is raised only once its seek lands,
+    /// so a stale frame from minutes ago is never shown.
+    private var mainRaisePending = false
 
-    private var observations: [NSKeyValueObservation] = []
-    private var notificationTokens: [NSObjectProtocol] = []
-    private var timeObserver: Any?
+    private var videoGravity: AVLayerVideoGravity = .resizeAspect
+    /// Every Flutter platform view showing this session (see makeView()).
+    private let attachedViews = NSHashTable<HdrPlayerContainerView>.weakObjects()
+    private var bridge: DashHlsBridge?
+    private var progressTimer: Timer?
 
     private var playWhenReady = false {
         didSet {
@@ -38,6 +183,7 @@ final class HdrPlayerSession: NSObject {
         }
     }
     private var desiredRate: Float = 1.0
+    private var volume: Float = 1.0
     private var reportedPlaying = false
     private var pendingStartMs: Int64 = 0
     private var disposed = false
@@ -46,7 +192,6 @@ final class HdrPlayerSession: NSObject {
         self.sessionId = sessionId
         self.sendEvent = sendEvent
         super.init()
-        player.actionAtItemEnd = .pause
     }
 
     /// The audio session is process-wide state. Switching to this backend
@@ -67,8 +212,8 @@ final class HdrPlayerSession: NSObject {
         }
     }
 
-    /// A fresh view for one Flutter platform view, with its own AVPlayerLayer
-    /// on the shared AVPlayer (multiple layers per player are supported).
+    /// A fresh view for one Flutter platform view, with its own AVPlayerLayers
+    /// on the session's players (multiple layers per player are supported).
     ///
     /// Handing every platform view the same UIView breaks across page
     /// transitions: all video pages share one player controller, so while
@@ -79,12 +224,22 @@ final class HdrPlayerSession: NSObject {
     func makeView() -> HdrPlayerContainerView {
         let view = HdrPlayerContainerView()
         view.backgroundColor = .clear
-        view.playerLayer.videoGravity = videoGravity
+        view.videoGravity = videoGravity
         if !disposed {
-            view.playerLayer.player = player
+            for engine in liveEngines {
+                view.setPlayer(engine.player, slot: engine.slot)
+            }
+            view.bringToFront(slot: active.slot)
         }
         attachedViews.add(view)
         return view
+    }
+
+    private var liveEngines: [PlaybackEngine] {
+        var engines = [main]
+        if !active.isMain { engines.append(active) }
+        if let spare, spare !== active { engines.append(spare) }
+        return engines
     }
 
     // MARK: - Public control surface
@@ -148,9 +303,9 @@ final class HdrPlayerSession: NSObject {
         asset.resourceLoader.setDelegate(bridge, queue: bridge.resourceLoaderQueue)
         let item = AVPlayerItem(asset: asset)
         item.preferredForwardBufferDuration = 0
-        self.item = item
+        turboSource = bridge.makeTurboSource()
 
-        observeItem(item)
+        observeMain(item)
         player.replaceCurrentItem(with: item)
         // Watchdog: if the item never becomes ready, surface an error so the
         // Dart side can fall back instead of showing a black view forever.
@@ -176,40 +331,91 @@ final class HdrPlayerSession: NSObject {
             player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
         }
         if playWhenReady {
-            player.playImmediately(atRate: desiredRate)
+            player.playImmediately(atRate: rate(for: main))
+            updateFastRate()
         }
     }
 
     func play() {
         playWhenReady = true
-        guard item != nil else { return }
+        guard main.item != nil else { return }
         // Re-arm: an interruption (call, another app) can deactivate the
         // session while this item stays loaded.
         activateAudioSession()
-        player.playImmediately(atRate: desiredRate)
+        active.player.playImmediately(atRate: rate(for: active))
+        updateFastRate()
     }
 
     func pause() {
         playWhenReady = false
-        player.pause()
+        cancelTransition()
+        for engine in liveEngines { engine.player.pause() }
     }
 
     func seekTo(positionMs: Int64) {
-        let target = CMTime(value: max(0, positionMs), timescale: 1000)
-        player.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
-            self?.sendTimeline()
+        let target = Double(max(0, positionMs)) / 1000
+        cancelTransition()
+        if !active.isMain {
+            if active.covers(target, margin: 3) {
+                let engine = active
+                engine.player.seek(to: engine.itemTime(target), toleranceBefore: .zero, toleranceAfter: .zero) {
+                    [weak self] finished in
+                    self?.onMain {
+                        guard let self, !self.disposed else { return }
+                        self.sendTimeline()
+                        if finished { self.updateFastRate() }
+                    }
+                }
+                return
+            }
+            // Outside the fast-rate window: continue on the HLS player.
+            let previous = active
+            let wasPlaying = previous.player.rate != 0
+            makeActive(main, raise: false)
+            previous.player.pause()
+            retire(previous)
+            seekMain(to: target, resume: wasPlaying)
+            return
+        }
+        seekMain(to: target, resume: false)
+    }
+
+    /// Seeks the HLS player. `resume` restarts it afterwards — only used when
+    /// it takes over from a fast engine that was playing; a plain seek keeps
+    /// whatever play state AVPlayer had (it may have paused on its own).
+    private func seekMain(to target: Double, resume: Bool) {
+        player.seek(to: CMTime(seconds: target, preferredTimescale: 90000), toleranceBefore: .zero, toleranceAfter: .zero) {
+            [weak self] finished in
+            self?.onMain {
+                guard let self, !self.disposed else { return }
+                if self.active === self.main { self.raiseMainIfPending() }
+                self.sendTimeline()
+                guard finished, self.active === self.main else { return }
+                if resume, self.playWhenReady, self.player.timeControlStatus == .paused {
+                    self.player.playImmediately(atRate: self.rate(for: self.main))
+                    self.syncReportedState()
+                }
+                self.updateFastRate()
+            }
         }
     }
 
     func setPlaybackSpeed(_ speed: Float) {
         desiredRate = max(0.1, speed)
-        if player.timeControlStatus != .paused {
-            player.rate = desiredRate
+        if playWhenReady, active.player.timeControlStatus != .paused {
+            active.player.rate = rate(for: active)
         }
+        updateFastRate()
+    }
+
+    func setFastRateHint(_ rate: Float) {
+        fastRateHint = rate
+        maybeWarm()
     }
 
     func setVolume(_ volume: Float) {
-        player.volume = min(max(volume, 0), 1)
+        self.volume = min(max(volume, 0), 1)
+        for engine in liveEngines { engine.player.volume = self.volume }
     }
 
     func setFitMode(_ fitMode: String) {
@@ -224,23 +430,24 @@ final class HdrPlayerSession: NSObject {
             videoGravity = .resizeAspect
         }
         for view in attachedViews.allObjects {
-            view.playerLayer.videoGravity = videoGravity
+            view.videoGravity = videoGravity
         }
     }
 
     func screenshot() -> FlutterStandardTypedData? {
-        guard let item else { return nil }
+        let engine = active
+        guard let item = engine.item else { return nil }
         // Attach the BGRA (SDR) output tap lazily: keeping it on the item
         // during normal playback pulls the pipeline out of the EDR/HDR path.
         let output: AVPlayerItemVideoOutput
-        if let existing = videoOutput {
+        if let existing = engine.videoOutput {
             output = existing
         } else {
             output = AVPlayerItemVideoOutput(pixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
             ])
             item.add(output)
-            videoOutput = output
+            engine.videoOutput = output
             Thread.sleep(forTimeInterval: 0.15)
         }
         let time = item.currentTime()
@@ -259,88 +466,579 @@ final class HdrPlayerSession: NSObject {
     func dispose() {
         disposed = true
         playWhenReady = false
+        cancelTransition()
         stopProgress()
-        observations.forEach { $0.invalidate() }
-        observations.removeAll()
-        notificationTokens.forEach(NotificationCenter.default.removeObserver)
-        notificationTokens.removeAll()
-        player.pause()
-        player.replaceCurrentItem(with: nil)
+        windowTask?.cancel()
+        windowTask = nil
+        unblockWork?.cancel()
+        unblockWork = nil
+        warmWindow?.loader.invalidate()
+        warmWindow = nil
+        for engine in liveEngines { engine.tearDown() }
+        spare = nil
+        active = main
+        turboSource = nil
         for view in attachedViews.allObjects {
-            view.playerLayer.player = nil
+            view.detachAll()
         }
         bridge = nil
     }
 
+    // MARK: - Fast-rate hand-over
+
+    private func rate(for engine: PlaybackEngine) -> Float {
+        engine.isMain ? min(desiredRate, Self.hlsMaxRate) : desiredRate
+    }
+
+    private var fastRateAvailable: Bool {
+        turboSource != nil && CACurrentMediaTime() >= turboBlockedUntil
+    }
+
+    private var wantsFastEngine: Bool {
+        desiredRate > Self.hlsMaxRate + 0.001 && fastRateAvailable
+    }
+
+    /// Reconciles which engine should play for the current rate and starts
+    /// or cancels a hand-over accordingly. Only acts while playing.
+    private func updateFastRate() {
+        guard !disposed, playWhenReady, main.item?.status == .readyToPlay else { return }
+        if active.isMain {
+            if wantsFastEngine {
+                ensureTransition(toMain: false)
+            } else {
+                cancelTransition()
+                maybeWarm()
+            }
+        } else if wantsFastEngine {
+            if transition?.toMain == true { cancelTransition() }
+            checkWindowEnd()
+        } else {
+            ensureTransition(toMain: true)
+        }
+    }
+
+    /// Stay on HLS (capped at 2x, still smooth) for a while after a failure.
+    private func blockFastRate(_ error: Error) {
+        NSLog("[HdrPlayer] fast-rate playback unavailable: \(error)")
+        turboBlockedUntil = CACurrentMediaTime() + 30
+        unblockWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.updateFastRate() }
+        unblockWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30.1, execute: work)
+    }
+
+    private func currentVideoTag() -> String? {
+        if let tag = active.window?.videoTag { return tag }
+        return turboSource?.videoTag(matching: main.item?.presentationSize ?? .zero)
+    }
+
+    /// Prepares the next window ahead of a likely speed-up (long press).
+    private func maybeWarm() {
+        guard !disposed, active.isMain, transition == nil, windowTask == nil,
+              max(fastRateHint, desiredRate) > Self.hlsMaxRate + 0.001,
+              fastRateAvailable,
+              main.item?.status == .readyToPlay,
+              CACurrentMediaTime() - lastWarmAttempt > 5
+        else { return }
+        let now = main.contentTime()
+        // Rebuild once the remaining lead drops below a quarter window.
+        let margin = Self.windowSeconds / 4
+        if let spare, spare.covers(now + 2, margin: margin) { return }
+        if let warmWindow, warmWindow.covers(now + 2, margin: margin) { return }
+        lastWarmAttempt = CACurrentMediaTime()
+        requestWindow(from: now)
+    }
+
+    private func requestWindow(from start: Double) {
+        guard windowTask == nil, let source = turboSource, let tag = currentVideoTag() else { return }
+        windowTask = Task { [weak self] in
+            let began = CACurrentMediaTime()
+            do {
+                let window = try await source.makeWindow(
+                    videoTag: tag,
+                    from: start,
+                    minDuration: Self.windowSeconds
+                )
+                NSLog(
+                    "[HdrPlayer] fast-rate window %@ %.1f–%.1f s ready in %.2f s",
+                    tag, window.origin, window.end, CACurrentMediaTime() - began
+                )
+                await MainActor.run { [weak self] in
+                    guard let self else {
+                        window.loader.invalidate()
+                        return
+                    }
+                    self.windowReady(window)
+                }
+            } catch {
+                await MainActor.run { [weak self] in
+                    self?.windowFailed(error)
+                }
+            }
+        }
+    }
+
+    private func windowReady(_ window: TurboWindow) {
+        windowTask = nil
+        guard !disposed else {
+            window.loader.invalidate()
+            return
+        }
+        if let transition, !transition.toMain, transition.target == nil {
+            let start = transition.from.contentTime()
+            if window.covers(start + 1, margin: 10) {
+                begin(transition, target: makeFastEngine(window))
+            } else {
+                // Built for a position we have since left (seek): rebuild.
+                window.loader.invalidate()
+                requestWindow(from: start)
+            }
+            return
+        }
+        // Nobody is waiting: get an engine ready for the next speed-up so a
+        // long press only has to seek it (item readiness costs a round trip).
+        if active.isMain, transition == nil {
+            warmWindow?.loader.invalidate()
+            warmWindow = nil
+            _ = makeFastEngine(window)
+        } else {
+            warmWindow?.loader.invalidate()
+            warmWindow = window
+        }
+    }
+
+    private func windowFailed(_ error: Error) {
+        windowTask = nil
+        guard !disposed, !(error is CancellationError) else { return }
+        blockFastRate(error)
+        if let transition, !transition.toMain, transition.target == nil {
+            cancelTransition()
+        }
+        updateFastRate()
+    }
+
+    private func checkWindowEnd() {
+        guard !active.isMain, let window = active.window, !window.reachesEnd else { return }
+        let now = active.contentTime()
+        let remaining = window.end - now
+        if remaining < max(0.3, Double(desiredRate) * 0.3) {
+            // The next engine did not take over in time.
+            hardSwitchToMain(at: now)
+            return
+        }
+        if transition == nil, remaining < max(8, Double(desiredRate) * 4) {
+            ensureTransition(toMain: !wantsFastEngine)
+        }
+    }
+
+    private func ensureTransition(toMain: Bool) {
+        if let current = transition {
+            if current.toMain == toMain { return }
+            cancelTransition()
+        }
+        let transition = EngineTransition(from: active, toMain: toMain)
+        self.transition = transition
+        if toMain {
+            begin(transition, target: main)
+            return
+        }
+        let start = active.contentTime()
+        let expected = start + Double(max(0.5, rate(for: active))) * leadToFast
+        if let spare, spare !== active, spare.covers(expected, margin: 20) {
+            begin(transition, target: spare)
+            return
+        }
+        if let window = warmWindow {
+            warmWindow = nil
+            if window.covers(expected, margin: 20) {
+                begin(transition, target: makeFastEngine(window))
+                return
+            }
+            window.loader.invalidate()
+        }
+        // An in-flight build (e.g. a warm-up) is picked up by windowReady.
+        requestWindow(from: start)
+    }
+
+    private func makeFastEngine(_ window: TurboWindow) -> PlaybackEngine {
+        if let old = spare, old !== active, old !== transition?.target {
+            drop(old)
+        }
+        let slot = active.slot == 1 ? 2 : 1
+        let engine = PlaybackEngine(slot: slot, window: window)
+        engine.player.volume = volume
+        // A window that ends before the content must not pause itself at its
+        // end (Dart would see a spurious "paused"); the hand-over or the
+        // end-of-window fallback takes it from there.
+        engine.player.actionAtItemEnd = window.reachesEnd ? .pause : .none
+        let item = AVPlayerItem(asset: window.asset)
+        observeFast(engine, item: item)
+        engine.player.replaceCurrentItem(with: item)
+        for view in attachedViews.allObjects {
+            view.setPlayer(engine.player, slot: slot)
+        }
+        spare = engine
+        return engine
+    }
+
+    private func drop(_ engine: PlaybackEngine) {
+        guard engine !== main, engine !== active, !engine.dropped else { return }
+        engine.dropped = true
+        if spare === engine { spare = nil }
+        engine.tearDown()
+        for view in attachedViews.allObjects {
+            view.setPlayer(nil, slot: engine.slot)
+        }
+    }
+
+    /// Keeps a fast-rate engine that just went off screen as the spare
+    /// (reusable for the next speed-up nearby); only one spare is kept.
+    private func retire(_ engine: PlaybackEngine) {
+        guard !engine.isMain, engine !== active, !engine.dropped else { return }
+        if let old = spare, old !== engine {
+            drop(old)
+        }
+        spare = engine
+    }
+
+    private func begin(_ transition: EngineTransition, target: PlaybackEngine) {
+        transition.target = target
+        guard let item = target.item else {
+            transitionFailed(transition, TurboMp4Error.malformed("engine without item"))
+            return
+        }
+        if item.status == .failed {
+            transitionFailed(transition, item.error ?? TurboMp4Error.malformed("item failed"))
+            return
+        }
+        // Seek right away even if the item is not ready yet: AVPlayer defers
+        // the seek, and the item then loads the hand-over point directly
+        // instead of first buffering the start of the window. Item failure
+        // is reported through observeFast → fastEngineDied.
+        seekTarget(transition)
+    }
+
+    /// The incoming engine could not be used: give up on this hand-over
+    /// without touching the engine that is playing.
+    private func transitionFailed(_ transition: EngineTransition, _ error: Error) {
+        guard self.transition === transition else { return }
+        let target = transition.target
+        cancelTransition()
+        if let target, !target.isMain {
+            blockFastRate(error)
+            drop(target)
+        }
+        updateFastRate()
+    }
+
+    /// Parks the incoming engine a little ahead of the outgoing one; the swap
+    /// happens when the outgoing engine reaches that point.
+    private func seekTarget(_ transition: EngineTransition) {
+        guard self.transition === transition, let target = transition.target else { return }
+        let from = transition.from
+        let fromRate = max(0.5, Double(from.player.rate > 0 ? from.player.rate : rate(for: from)))
+        let leadWall = (transition.toMain ? leadToMain : leadToFast) * pow(2, Double(transition.attempts))
+        let now = from.contentTime()
+        var targetTime = now + fromRate * leadWall
+        if let window = target.window {
+            if targetTime < window.origin, window.origin - now < 4 {
+                targetTime = window.origin + 0.05
+            }
+            guard window.covers(targetTime, margin: 1) else {
+                transitionFailed(transition, TurboMp4Error.malformed("window does not cover hand-over"))
+                return
+            }
+        }
+        if let window = from.window, !window.reachesEnd {
+            // Never schedule the meeting point past the outgoing window.
+            let limit = window.end - 0.5
+            if targetTime > limit {
+                if now + 0.2 >= limit {
+                    forceSwap(transition)
+                    return
+                }
+                targetTime = limit
+            }
+        }
+        transition.targetTime = targetTime
+        transition.seekIssuedAt = CACurrentMediaTime()
+        target.player.pause()
+        target.player.seek(to: target.itemTime(targetTime), toleranceBefore: .zero, toleranceAfter: .zero) {
+            [weak self, weak transition] finished in
+            self?.onMain {
+                guard let self, let transition, self.transition === transition else { return }
+                if finished {
+                    self.prerollTarget(transition)
+                } else {
+                    self.retryOrForce(transition)
+                }
+            }
+        }
+        transition.deadline?.cancel()
+        var delay = leadWall + 5
+        if let window = from.window, !window.reachesEnd {
+            delay = min(delay, max(0.1, (window.end - now) / fromRate - 0.3))
+        }
+        let deadline = DispatchWorkItem { [weak self, weak transition] in
+            guard let self, let transition, self.transition === transition else { return }
+            if transition.from.player.rate == 0 {
+                // The outgoing engine stopped (interruption): re-evaluate on play.
+                self.cancelTransition()
+                return
+            }
+            self.forceSwap(transition)
+        }
+        transition.deadline = deadline
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: deadline)
+    }
+
+    private func prerollTarget(_ transition: EngineTransition) {
+        guard let target = transition.target else { return }
+        let arm = { [weak self, weak transition] in
+            guard let self, let transition, self.transition === transition else { return }
+            self.armBoundary(transition)
+        }
+        // preroll raises unless the player is ready and stopped.
+        if target.player.status == .readyToPlay,
+           target.item?.status == .readyToPlay,
+           target.player.rate == 0 {
+            target.player.preroll(atRate: rate(for: target)) { [weak self] _ in
+                self?.onMain(arm)
+            }
+        } else {
+            arm()
+        }
+    }
+
+    private func learnLead(_ transition: EngineTransition) {
+        let took = CACurrentMediaTime() - transition.seekIssuedAt
+        guard took.isFinite, took > 0 else { return }
+        let wanted = min(3.0, max(0.4, took * 1.3 + 0.15))
+        if transition.toMain {
+            leadToMain = (leadToMain + wanted) / 2
+        } else {
+            leadToFast = (leadToFast + wanted) / 2
+        }
+    }
+
+    private func armBoundary(_ transition: EngineTransition) {
+        let from = transition.from
+        learnLead(transition)
+        if from.contentTime() >= transition.targetTime - 0.01 {
+            retryOrForce(transition)
+            return
+        }
+        let time = from.itemTime(transition.targetTime)
+        transition.boundaryToken = from.player.addBoundaryTimeObserver(
+            forTimes: [NSValue(time: time)],
+            queue: .main
+        ) { [weak self, weak transition] in
+            guard let self, let transition, self.transition === transition else { return }
+            self.swap(transition)
+        }
+    }
+
+    private func retryOrForce(_ transition: EngineTransition) {
+        guard self.transition === transition else { return }
+        removeBoundary(transition)
+        transition.attempts += 1
+        if transition.attempts >= 3 {
+            forceSwap(transition)
+        } else {
+            seekTarget(transition)
+        }
+    }
+
+    /// Last resort when the engines never meet: jump to where the outgoing
+    /// engine is now (a small visible skip instead of an endless wait).
+    private func forceSwap(_ transition: EngineTransition) {
+        guard self.transition === transition, let target = transition.target else { return }
+        removeBoundary(transition)
+        transition.deadline?.cancel()
+        transition.deadline = nil
+        let now = transition.from.contentTime()
+        guard target.covers(now, margin: 0.5) else {
+            transitionFailed(transition, TurboMp4Error.malformed("forced hand-over outside window"))
+            return
+        }
+        target.player.seek(to: target.itemTime(now), toleranceBefore: .zero, toleranceAfter: .positiveInfinity) {
+            [weak self, weak transition] _ in
+            self?.onMain {
+                guard let self, let transition, self.transition === transition else { return }
+                self.swap(transition)
+            }
+        }
+    }
+
+    private func swap(_ transition: EngineTransition) {
+        guard self.transition === transition, let target = transition.target else { return }
+        removeBoundary(transition)
+        transition.deadline?.cancel()
+        transition.deadline = nil
+        transition.readyObservation = nil
+        self.transition = nil
+        let from = transition.from
+        let resume = playWhenReady && from.player.rate != 0
+        NSLog(
+            "[HdrPlayer] hand-over slot %d → %d at %.3f s (outgoing at %.3f s, attempt %d)",
+            from.slot, target.slot, target.contentTime(), from.contentTime(), transition.attempts
+        )
+        makeActive(target)
+        if resume {
+            target.player.playImmediately(atRate: rate(for: target))
+        }
+        from.player.pause()
+        if !target.isMain, spare === target {
+            spare = nil
+        }
+        if !from.isMain {
+            if target.isMain {
+                retire(from)  // reusable for the next long press nearby
+            } else {
+                drop(from)
+            }
+        }
+        syncReportedState()
+        sendTimeline()
+        updateFastRate()
+    }
+
+    private func removeBoundary(_ transition: EngineTransition) {
+        if let token = transition.boundaryToken {
+            transition.from.player.removeTimeObserver(token)
+            transition.boundaryToken = nil
+        }
+    }
+
+    private func cancelTransition() {
+        guard let transition else { return }
+        self.transition = nil
+        transition.readyObservation = nil
+        transition.deadline?.cancel()
+        transition.deadline = nil
+        removeBoundary(transition)
+        if let target = transition.target, target !== active {
+            target.player.pause()
+        }
+    }
+
+    private func makeActive(_ engine: PlaybackEngine, raise: Bool = true) {
+        active = engine
+        engine.player.volume = volume
+        if raise {
+            mainRaisePending = false
+            for view in attachedViews.allObjects {
+                view.bringToFront(slot: engine.slot)
+            }
+        } else {
+            mainRaisePending = true
+            // Safety net in case the seek that should raise it never lands.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in
+                guard let self, self.active === engine else { return }
+                self.raiseMainIfPending()
+            }
+        }
+    }
+
+    private func raiseMainIfPending() {
+        guard mainRaisePending else { return }
+        mainRaisePending = false
+        for view in attachedViews.allObjects {
+            view.bringToFront(slot: active.slot)
+        }
+    }
+
+    /// Continue on the HLS player at `content` (fallback paths only).
+    private func hardSwitchToMain(at content: Double) {
+        guard !active.isMain else {
+            cancelTransition()
+            return
+        }
+        // A next fast window that is already parked can take over instead.
+        if wantsFastEngine, let transition, let target = transition.target, !target.isMain,
+           target.item?.status == .readyToPlay, target.covers(content, margin: 0.5) {
+            forceSwap(transition)
+            return
+        }
+        cancelTransition()
+        let previous = active
+        makeActive(main, raise: false)
+        previous.player.pause()
+        if let window = previous.window, window.end <= content + 1 {
+            drop(previous)  // played out; keep any prepared next window instead
+        } else {
+            retire(previous)
+        }
+        seekMain(to: content, resume: playWhenReady)
+    }
+
+    private func fastEngineDied(_ engine: PlaybackEngine, error: Error) {
+        guard !engine.dropped else { return }
+        blockFastRate(error)
+        if engine === active {
+            hardSwitchToMain(at: engine.contentTime())
+            drop(engine)
+        } else if let transition, transition.target === engine {
+            cancelTransition()
+            drop(engine)
+            updateFastRate()
+        } else {
+            drop(engine)
+        }
+    }
+
     // MARK: - Observation
 
-    private func observeItem(_ item: AVPlayerItem) {
-        observations.append(item.observe(\.status, options: [.new]) { [weak self] item, _ in
-            guard let self else { return }
-            switch item.status {
-            case .readyToPlay:
-                self.sendTimeline()
-                self.send("ready")
-                self.send("buffering", ["value": false])
-            case .failed:
-                self.reportError(item.error ?? DashHlsError.parse("item failed"))
-            default:
-                break
+    private func onMain(_ body: @escaping () -> Void) {
+        if Thread.isMainThread {
+            body()
+        } else {
+            DispatchQueue.main.async(execute: body)
+        }
+    }
+
+    private func observeMain(_ item: AVPlayerItem) {
+        let engine = main
+        engine.observations.append(item.observe(\.status, options: [.new]) { [weak self] item, _ in
+            self?.onMain {
+                guard let self else { return }
+                switch item.status {
+                case .readyToPlay:
+                    if self.active === engine {
+                        self.sendTimeline()
+                        self.send("buffering", ["value": false])
+                    }
+                    self.send("ready")
+                    self.updateFastRate()
+                case .failed:
+                    self.reportError(item.error ?? DashHlsError.parse("item failed"))
+                default:
+                    break
+                }
             }
         })
 
-        observations.append(item.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
+        engine.observations.append(item.observe(\.presentationSize, options: [.new]) { [weak self] item, _ in
             let size = item.presentationSize
             if size.width > 0, size.height > 0 {
                 self?.send("size", ["width": Int(size.width), "height": Int(size.height)])
             }
         })
 
-        observations.append(item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self] item, _ in
-            if item.isPlaybackBufferEmpty {
-                self?.send("buffering", ["value": true])
-            }
-        })
+        observeCommon(engine, item: item)
 
-        observations.append(item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self] item, _ in
-            if item.isPlaybackLikelyToKeepUp {
-                self?.send("buffering", ["value": false])
-            }
-        })
-
-        observations.append(player.observe(\.timeControlStatus, options: [.new]) { [weak self] player, _ in
-            guard let self else { return }
-            switch player.timeControlStatus {
-            case .playing:
-                self.reportedPlaying = true
-                self.send("playing")
-                self.startProgress()
-            case .waitingToPlayAtSpecifiedRate:
-                self.send("buffering", ["value": true])
-            case .paused:
-                if self.reportedPlaying {
-                    self.reportedPlaying = false
-                    self.send("paused")
-                }
-                self.stopProgress()
-            @unknown default:
-                break
-            }
-        })
-
-        notificationTokens.append(
+        engine.notificationTokens.append(
             NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemDidPlayToEndTime,
                 object: item,
                 queue: .main
             ) { [weak self] _ in
-                self?.playWhenReady = false
-                self?.send("completed")
-                self?.stopProgress()
+                guard let self, self.active === engine else { return }
+                self.contentCompleted()
             }
         )
 
-        notificationTokens.append(
+        engine.notificationTokens.append(
             NotificationCenter.default.addObserver(
                 forName: .AVPlayerItemFailedToPlayToEndTime,
                 object: item,
@@ -353,31 +1051,133 @@ final class HdrPlayerSession: NSObject {
         )
     }
 
+    private func observeFast(_ engine: PlaybackEngine, item: AVPlayerItem) {
+        engine.observations.append(item.observe(\.status, options: [.new]) { [weak self, weak engine] item, _ in
+            guard item.status == .failed else { return }
+            self?.onMain {
+                guard let self, let engine else { return }
+                self.fastEngineDied(engine, error: item.error ?? TurboMp4Error.malformed("item failed"))
+            }
+        })
+
+        observeCommon(engine, item: item)
+
+        engine.notificationTokens.append(
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemDidPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self, weak engine] _ in
+                guard let self, let engine, self.active === engine, let window = engine.window else { return }
+                if window.reachesEnd {
+                    self.contentCompleted()
+                } else {
+                    self.hardSwitchToMain(at: window.end)
+                }
+            }
+        )
+
+        engine.notificationTokens.append(
+            NotificationCenter.default.addObserver(
+                forName: .AVPlayerItemFailedToPlayToEndTime,
+                object: item,
+                queue: .main
+            ) { [weak self, weak engine] notification in
+                guard let self, let engine else { return }
+                let error = notification.userInfo?[AVPlayerItemFailedToPlayToEndTimeErrorKey] as? Error
+                self.fastEngineDied(engine, error: error ?? TurboMp4Error.malformed("failed to play to end"))
+            }
+        )
+    }
+
+    /// Buffering and play state, forwarded only for the engine on screen.
+    private func observeCommon(_ engine: PlaybackEngine, item: AVPlayerItem) {
+        engine.observations.append(item.observe(\.isPlaybackBufferEmpty, options: [.new]) { [weak self, weak engine] item, _ in
+            guard item.isPlaybackBufferEmpty else { return }
+            self?.onMain {
+                guard let self, self.active === engine else { return }
+                self.send("buffering", ["value": true])
+            }
+        })
+
+        engine.observations.append(item.observe(\.isPlaybackLikelyToKeepUp, options: [.new]) { [weak self, weak engine] item, _ in
+            guard item.isPlaybackLikelyToKeepUp else { return }
+            self?.onMain {
+                guard let self, self.active === engine else { return }
+                self.send("buffering", ["value": false])
+            }
+        })
+
+        engine.observations.append(engine.player.observe(\.timeControlStatus, options: [.new]) { [weak self, weak engine] _, _ in
+            self?.onMain {
+                guard let self, let engine, self.active === engine else { return }
+                self.syncReportedState()
+            }
+        })
+    }
+
+    /// Emits playing / paused / buffering for the active engine's state.
+    private func syncReportedState() {
+        guard !disposed else { return }
+        switch active.player.timeControlStatus {
+        case .playing:
+            reportedPlaying = true
+            send("playing")
+            startProgress()
+        case .waitingToPlayAtSpecifiedRate:
+            send("buffering", ["value": true])
+        case .paused:
+            if reportedPlaying {
+                reportedPlaying = false
+                send("paused")
+            }
+            stopProgress()
+        @unknown default:
+            break
+        }
+    }
+
+    private func contentCompleted() {
+        cancelTransition()
+        playWhenReady = false
+        send("completed")
+        stopProgress()
+    }
+
+
     // MARK: - Progress heartbeat (250 ms, mirrors the Android tick)
 
     private func startProgress() {
-        guard timeObserver == nil else { return }
-        let interval = CMTime(value: 1, timescale: 4)
-        timeObserver = player.addPeriodicTimeObserver(forInterval: interval, queue: .main) {
-            [weak self] _ in
-            self?.sendTimeline()
+        guard progressTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            self.sendTimeline()
+            if self.active.isMain {
+                self.maybeWarm()
+            } else {
+                self.checkWindowEnd()
+            }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        progressTimer = timer
     }
 
     private func stopProgress() {
-        if let timeObserver {
-            player.removeTimeObserver(timeObserver)
-            self.timeObserver = nil
-        }
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
 
     private func sendTimeline() {
-        guard let item else { return }
-        let positionMs = item.currentTime().milliseconds
-        let durationMs = item.duration.milliseconds
+        guard let mainItem = main.item else { return }
+        let engine = active
+        let positionMs = Int64(engine.contentTime() * 1000)
+        let durationMs = mainItem.duration.milliseconds
         var bufferedMs: Int64 = 0
-        if let range = item.loadedTimeRanges.first?.timeRangeValue {
-            bufferedMs = CMTimeAdd(range.start, range.duration).milliseconds
+        if let range = engine.item?.loadedTimeRanges.first?.timeRangeValue {
+            let end = CMTimeAdd(range.start, range.duration).seconds
+            if end.isFinite {
+                bufferedMs = Int64((end + engine.origin) * 1000)
+            }
         }
         send(
             "position",
@@ -404,7 +1204,7 @@ final class HdrPlayerSession: NSObject {
         }
         let nsError = error as NSError
         var logDetail = ""
-        if let last = item?.errorLog()?.events.last {
+        if let last = main.item?.errorLog()?.events.last {
             var uri = last.uri ?? "-"
             if uri.count > 120 { uri = String(uri.prefix(120)) + "…" }
             logDetail = " || log[\(last.errorStatusCode) \(last.errorComment ?? "")] \(uri)"

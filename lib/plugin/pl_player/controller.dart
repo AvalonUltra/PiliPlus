@@ -1250,6 +1250,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
         await setPlaybackSpeed(speed);
       }
     }
+    _updateFastRateHint();
     _initVideoFit();
 
     // 自动播放
@@ -1664,6 +1665,17 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     }
   }
 
+  /// 原生(AVPlayer)后端:提前告知长按会用到的倍速,超过 2 倍时原生端
+  /// 预先准备高倍速窗口,长按后能尽快切到平滑的 2 倍以上播放
+  void _updateFastRateHint() {
+    final backend = _androidHdrBackend;
+    if (backend == null || isLive) return;
+    final longPress = enableAutoLongPressSpeed
+        ? playbackSpeed * 2
+        : longPressSpeed;
+    backend.setFastRateHint(max(longPress, playbackSpeed));
+  }
+
   /// 设置倍速
   Future<void> setPlaybackSpeed(double speed) async {
     lastPlaybackSpeed = playbackSpeed;
@@ -1677,6 +1689,7 @@ class PlPlayerController with BlockConfigMixin, AudioNormalizationMixin {
     await (_androidHdrBackend?.setPlaybackSpeed(speed) ??
         _videoPlayerController?.setRate(speed));
     if (!isLive) _playbackSpeed.value = speed;
+    if (!longPressStatus.value) _updateFastRateHint();
     _updatePlaybackState();
     if (danmakuController != null) {
       try {
