@@ -113,6 +113,11 @@ private final class EngineTransition {
     var targetTime: Double = 0
     var attempts = 0
     var seekIssuedAt: CFTimeInterval = 0
+    /// Bumped for every seek issued on the target; callbacks of superseded
+    /// seeks/prerolls compare it and bail out.
+    var generation = 0
+    /// forceSwap is in progress; everything else stands down.
+    var forcing = false
     var readyObservation: NSKeyValueObservation?
     var boundaryToken: Any?
     var deadline: DispatchWorkItem?
@@ -164,6 +169,12 @@ final class HdrPlayerSession: NSObject {
     /// Main became active but its layer is raised only once its seek lands,
     /// so a stale frame from minutes ago is never shown.
     private var mainRaisePending = false
+    /// Main took over from a playing fast engine and must resume once its
+    /// seek lands, even if Dart seeks again before that.
+    private var resumeMainAfterSeek = false
+    /// A > 2x rate was used in this session; only then is a ready spare
+    /// engine kept around (otherwise warm-ups prepare the window only).
+    private var fastRateUsed = false
 
     private var videoGravity: AVLayerVideoGravity = .resizeAspect
     /// Every Flutter platform view showing this session (see makeView()).
@@ -348,6 +359,7 @@ final class HdrPlayerSession: NSObject {
 
     func pause() {
         playWhenReady = false
+        resumeMainAfterSeek = false
         cancelTransition()
         for engine in liveEngines { engine.player.pause() }
     }
@@ -374,6 +386,7 @@ final class HdrPlayerSession: NSObject {
             makeActive(main, raise: false)
             previous.player.pause()
             retire(previous)
+            if wasPlaying { resumeMainAfterSeek = true }
             seekMain(to: target, resume: wasPlaying)
             return
         }
@@ -388,10 +401,14 @@ final class HdrPlayerSession: NSObject {
             [weak self] finished in
             self?.onMain {
                 guard let self, !self.disposed else { return }
-                if self.active === self.main { self.raiseMainIfPending() }
                 self.sendTimeline()
+                // A superseded seek neither raises main (its frame is stale)
+                // nor consumes the pending resume.
                 guard finished, self.active === self.main else { return }
-                if resume, self.playWhenReady, self.player.timeControlStatus == .paused {
+                self.raiseMainIfPending()
+                let shouldResume = resume || self.resumeMainAfterSeek
+                self.resumeMainAfterSeek = false
+                if shouldResume, self.playWhenReady, self.player.timeControlStatus == .paused {
                     self.player.playImmediately(atRate: self.rate(for: self.main))
                     self.syncReportedState()
                 }
@@ -402,6 +419,7 @@ final class HdrPlayerSession: NSObject {
 
     func setPlaybackSpeed(_ speed: Float) {
         desiredRate = max(0.1, speed)
+        if desiredRate > Self.hlsMaxRate + 0.001 { fastRateUsed = true }
         if playWhenReady, active.player.timeControlStatus != .paused {
             active.player.rate = rate(for: active)
         }
@@ -466,6 +484,7 @@ final class HdrPlayerSession: NSObject {
     func dispose() {
         disposed = true
         playWhenReady = false
+        resumeMainAfterSeek = false
         cancelTransition()
         stopProgress()
         windowTask?.cancel()
@@ -595,12 +614,14 @@ final class HdrPlayerSession: NSObject {
             }
             return
         }
-        // Nobody is waiting: get an engine ready for the next speed-up so a
-        // long press only has to seek it (item readiness costs a round trip).
-        if active.isMain, transition == nil {
+        // Nobody is waiting. Once > 2x has been used in this session, keep a
+        // ready engine so a long press only has to seek it (item readiness
+        // costs a round trip); before that only the window is kept, so
+        // sessions that never speed up download nothing extra.
+        if active.isMain, transition == nil, fastRateUsed {
             warmWindow?.loader.invalidate()
             warmWindow = nil
-            _ = makeFastEngine(window)
+            _ = makeFastEngine(window, standby: true)
         } else {
             warmWindow?.loader.invalidate()
             warmWindow = window
@@ -610,10 +631,14 @@ final class HdrPlayerSession: NSObject {
     private func windowFailed(_ error: Error) {
         windowTask = nil
         guard !disposed, !(error is CancellationError) else { return }
-        blockFastRate(error)
-        if let transition, !transition.toMain, transition.target == nil {
-            cancelTransition()
+        guard let transition, !transition.toMain, transition.target == nil else {
+            // A background warm-up: just back off, a press builds its own.
+            NSLog("[HdrPlayer] fast-rate warm-up failed: \(error)")
+            lastWarmAttempt = CACurrentMediaTime() + 25
+            return
         }
+        blockFastRate(error)
+        cancelTransition()
         updateFastRate()
     }
 
@@ -622,6 +647,9 @@ final class HdrPlayerSession: NSObject {
         let now = active.contentTime()
         let remaining = window.end - now
         if remaining < max(0.3, Double(desiredRate) * 0.3) {
+            // A hand-over that is already parked or forcing finishes on its
+            // own (its deadline fires before the window ends).
+            if let transition, transition.target != nil, remaining > 0.05 { return }
             // The next engine did not take over in time.
             hardSwitchToMain(at: now)
             return
@@ -660,7 +688,7 @@ final class HdrPlayerSession: NSObject {
         requestWindow(from: start)
     }
 
-    private func makeFastEngine(_ window: TurboWindow) -> PlaybackEngine {
+    private func makeFastEngine(_ window: TurboWindow, standby: Bool = false) -> PlaybackEngine {
         if let old = spare, old !== active, old !== transition?.target {
             drop(old)
         }
@@ -672,6 +700,8 @@ final class HdrPlayerSession: NSObject {
         // end-of-window fallback takes it from there.
         engine.player.actionAtItemEnd = window.reachesEnd ? .pause : .none
         let item = AVPlayerItem(asset: window.asset)
+        // A standby engine only needs to become ready, not to buffer ahead.
+        if standby { item.preferredForwardBufferDuration = 1 }
         observeFast(engine, item: item)
         engine.player.replaceCurrentItem(with: item)
         for view in attachedViews.allObjects {
@@ -711,6 +741,9 @@ final class HdrPlayerSession: NSObject {
             transitionFailed(transition, item.error ?? TurboMp4Error.malformed("item failed"))
             return
         }
+        if !target.isMain {
+            item.preferredForwardBufferDuration = 0  // automatic again
+        }
         // Seek right away even if the item is not ready yet: AVPlayer defers
         // the seek, and the item then loads the hand-over point directly
         // instead of first buffering the start of the window. Item failure
@@ -734,7 +767,7 @@ final class HdrPlayerSession: NSObject {
     /// Parks the incoming engine a little ahead of the outgoing one; the swap
     /// happens when the outgoing engine reaches that point.
     private func seekTarget(_ transition: EngineTransition) {
-        guard self.transition === transition, let target = transition.target else { return }
+        guard self.transition === transition, !transition.forcing, let target = transition.target else { return }
         let from = transition.from
         let fromRate = max(0.5, Double(from.player.rate > 0 ? from.player.rate : rate(for: from)))
         let leadWall = (transition.toMain ? leadToMain : leadToFast) * pow(2, Double(transition.attempts))
@@ -750,8 +783,9 @@ final class HdrPlayerSession: NSObject {
             }
         }
         if let window = from.window, !window.reachesEnd {
-            // Never schedule the meeting point past the outgoing window.
-            let limit = window.end - 0.5
+            // Meet before the outgoing window runs out, and before the
+            // end-of-window fallback threshold (rate * 0.3 s of content).
+            let limit = window.end - max(0.5, fromRate * 0.3)
             if targetTime > limit {
                 if now + 0.2 >= limit {
                     forceSwap(transition)
@@ -762,11 +796,15 @@ final class HdrPlayerSession: NSObject {
         }
         transition.targetTime = targetTime
         transition.seekIssuedAt = CACurrentMediaTime()
+        transition.generation += 1
+        let generation = transition.generation
         target.player.pause()
         target.player.seek(to: target.itemTime(targetTime), toleranceBefore: .zero, toleranceAfter: .zero) {
             [weak self, weak transition] finished in
             self?.onMain {
-                guard let self, let transition, self.transition === transition else { return }
+                guard let self, let transition, self.transition === transition,
+                      !transition.forcing, transition.generation == generation
+                else { return }
                 if finished {
                     self.prerollTarget(transition)
                 } else {
@@ -777,7 +815,8 @@ final class HdrPlayerSession: NSObject {
         transition.deadline?.cancel()
         var delay = leadWall + 5
         if let window = from.window, !window.reachesEnd {
-            delay = min(delay, max(0.1, (window.end - now) / fromRate - 0.3))
+            // Force before the outgoing window ends, but after the meeting point.
+            delay = min(delay, max(0.1, (window.end - now) / fromRate - 0.15))
         }
         let deadline = DispatchWorkItem { [weak self, weak transition] in
             guard let self, let transition, self.transition === transition else { return }
@@ -793,9 +832,12 @@ final class HdrPlayerSession: NSObject {
     }
 
     private func prerollTarget(_ transition: EngineTransition) {
-        guard let target = transition.target else { return }
+        guard let target = transition.target, !transition.forcing else { return }
+        let generation = transition.generation
         let arm = { [weak self, weak transition] in
-            guard let self, let transition, self.transition === transition else { return }
+            guard let self, let transition, self.transition === transition,
+                  !transition.forcing, transition.generation == generation
+            else { return }
             self.armBoundary(transition)
         }
         // preroll raises unless the player is ready and stopped.
@@ -822,6 +864,7 @@ final class HdrPlayerSession: NSObject {
     }
 
     private func armBoundary(_ transition: EngineTransition) {
+        guard !transition.forcing else { return }
         let from = transition.from
         learnLead(transition)
         if from.contentTime() >= transition.targetTime - 0.01 {
@@ -839,7 +882,7 @@ final class HdrPlayerSession: NSObject {
     }
 
     private func retryOrForce(_ transition: EngineTransition) {
-        guard self.transition === transition else { return }
+        guard self.transition === transition, !transition.forcing else { return }
         removeBoundary(transition)
         transition.attempts += 1
         if transition.attempts >= 3 {
@@ -852,7 +895,9 @@ final class HdrPlayerSession: NSObject {
     /// Last resort when the engines never meet: jump to where the outgoing
     /// engine is now (a small visible skip instead of an endless wait).
     private func forceSwap(_ transition: EngineTransition) {
-        guard self.transition === transition, let target = transition.target else { return }
+        guard self.transition === transition, !transition.forcing, let target = transition.target else { return }
+        transition.forcing = true
+        transition.generation += 1
         removeBoundary(transition)
         transition.deadline?.cancel()
         transition.deadline = nil
@@ -861,13 +906,25 @@ final class HdrPlayerSession: NSObject {
             transitionFailed(transition, TurboMp4Error.malformed("forced hand-over outside window"))
             return
         }
+        target.player.cancelPendingPrerolls()
         target.player.seek(to: target.itemTime(now), toleranceBefore: .zero, toleranceAfter: .positiveInfinity) {
-            [weak self, weak transition] _ in
+            [weak self, weak transition] finished in
             self?.onMain {
                 guard let self, let transition, self.transition === transition else { return }
-                self.swap(transition)
+                if finished {
+                    self.swap(transition)
+                } else {
+                    self.transitionFailed(transition, TurboMp4Error.malformed("forced hand-over seek interrupted"))
+                }
             }
         }
+        // Never wait forever on the forced seek.
+        let watchdog = DispatchWorkItem { [weak self, weak transition] in
+            guard let self, let transition, self.transition === transition else { return }
+            self.transitionFailed(transition, TurboMp4Error.malformed("forced hand-over timed out"))
+        }
+        transition.deadline = watchdog
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3, execute: watchdog)
     }
 
     private func swap(_ transition: EngineTransition) {
@@ -969,6 +1026,7 @@ final class HdrPlayerSession: NSObject {
         } else {
             retire(previous)
         }
+        if playWhenReady { resumeMainAfterSeek = true }
         seekMain(to: content, resume: playWhenReady)
     }
 
@@ -1139,10 +1197,12 @@ final class HdrPlayerSession: NSObject {
 
     private func contentCompleted() {
         cancelTransition()
+        resumeMainAfterSeek = false
         playWhenReady = false
         send("completed")
         stopProgress()
     }
+
 
 
     // MARK: - Progress heartbeat (250 ms, mirrors the Android tick)
@@ -1151,7 +1211,11 @@ final class HdrPlayerSession: NSObject {
         guard progressTimer == nil else { return }
         let timer = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in
             guard let self else { return }
-            self.sendTimeline()
+            // Like the old periodic time observer: no position ticks while
+            // stalled (Dart clears its buffering indicator on every tick).
+            if self.active.player.timeControlStatus == .playing {
+                self.sendTimeline()
+            }
             if self.active.isMain {
                 self.maybeWarm()
             } else {
@@ -1173,10 +1237,16 @@ final class HdrPlayerSession: NSObject {
         let positionMs = Int64(engine.contentTime() * 1000)
         let durationMs = mainItem.duration.milliseconds
         var bufferedMs: Int64 = 0
-        if let range = engine.item?.loadedTimeRanges.first?.timeRangeValue {
-            let end = CMTimeAdd(range.start, range.duration).seconds
-            if end.isFinite {
-                bufferedMs = Int64((end + engine.origin) * 1000)
+        if let item = engine.item {
+            // The range around the playhead; older ranges linger after seeks.
+            let now = item.currentTime().seconds
+            for value in item.loadedTimeRanges {
+                let range = value.timeRangeValue
+                let start = range.start.seconds
+                let end = CMTimeAdd(range.start, range.duration).seconds
+                if start.isFinite, end.isFinite, start <= now + 0.5, end >= now {
+                    bufferedMs = max(bufferedMs, Int64((end + engine.origin) * 1000))
+                }
             }
         }
         send(

@@ -261,7 +261,7 @@ final class TurboSource {
         var position = segment.offset
         while position + 8 <= end {
             if !covers(position, min(end, position + 16)) {
-                buffer = try await read(track, from: position, length: min(16 << 10, end - position))
+                buffer = try await read(track, from: position, length: min(8 << 10, end - position))
                 bufferStart = position
             }
             guard let header = turboBoxHeader(buffer, at: Int(position - bufferStart)) else {
